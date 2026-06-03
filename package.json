@@ -1,0 +1,29 @@
+{
+  "name": "vakifbank-qa-automation",
+  "version": "2.0.0",
+  "description": "AI-Powered Autonomous Test Automation Platform for Web Applications",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "test": "playwright test",
+    "ai": "node ai-agent2.js"
+  },
+  "keywords": ["qa", "automation", "playwright", "ai", "bdd"],
+  "author": "VakıfBank QA Team",
+  "license": "ISC",
+  "type": "commonjs",
+  "devDependencies": {
+    "@playwright/test": "^1.59.1",
+    "@types/node": "^25.6.0",
+    "allure-commandline": "^2.38.1",
+    "allure-playwright": "^3.7.1",
+    "typescript": "^6.0.2"
+  },
+  "dependencies": {
+    "dotenv": "^17.4.2",
+    "express": "^5.2.1",
+    "multer": "^2.1.1",
+    "playwright": "^1.59.1",
+    "socket.io": "^4.8.3"
+  }
+}

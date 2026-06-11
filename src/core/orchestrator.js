@@ -70,7 +70,7 @@ async function scanLivePage(page) {
     });
 }
 
-async function executeAutonomousFlow(url, userPrompt) {
+async function executeAutonomousFlow(url, userPrompt, useGrid = false) {
     try {
         if (!url.startsWith('http://') && !url.startsWith('https://')) url = 'https://' + url;
         cleanPreviousState();
@@ -80,10 +80,18 @@ async function executeAutonomousFlow(url, userPrompt) {
         fs.writeFileSync(FEATURE_FILE, testPlan);
 
         // 2. KEŞİF (EXPLORATION) AŞAMASI
-        logInfo('🕵️', `AI Keşif Modu Başlatılıyor... Tarayıcı bağlanıyor.`);
-        const browser = await chromium.launch({ headless: false, args: ['--start-maximized'] });
-        const context = await browser.newContext({ viewport: null });
+        let browser;
+        const gridEndpoint = process.env.GRID_WS_ENDPOINT;
+
+        if (useGrid && gridEndpoint) {
+            logInfo('☁️', `Selenium Grid'e bağlanılıyor... Adres: ${gridEndpoint}`);
+            browser = await chromium.connect({ wsEndpoint: gridEndpoint });
+        } else {
+            logInfo('🕵️', `Lokal AI Keşif Modu Başlatılıyor... Tarayıcı bağlanıyor.`);
+            browser = await chromium.launch({ headless: false, args: ['--start-maximized'] });
+        }
         
+        const context = await browser.newContext({ viewport: null });
         // ⚠️ YENİ: Dinamik Aktif Sekme Yönetimi
         let activePage = await context.newPage();
         

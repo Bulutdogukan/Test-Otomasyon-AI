@@ -73,7 +73,7 @@ io.on('connection', (socket) => {
 
         try {
             // YENİ MİMARİ: Orchestrator'ı doğrudan çağırıyoruz (Child Process hantallığı bitti)
-            const exitCode = await executeAutonomousFlow(url, prompt);
+            const exitCode = await executeAutonomousFlow(url, prompt, useGrid);
             
             socket.emit('log', `\n✅ Test Döngüsü Tamamlandı. (Çıkış Kodu: ${exitCode})\n`);
             

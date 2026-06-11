@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>VakıfBank Test Otomasyonu</title>
+    <title>AI Destekli Web Test Otomasyonu</title>
     <style>
         /* CSS Reset ve Temel Ayarlar */
         * { box-sizing: border-box; margin: 0; padding: 0; }
@@ -76,12 +76,12 @@
     <div class="sidebar">
         <div class="header">
             <h1>⚙️ AI Destekli Test Uzmanı</h1>
-            <p>VakıfBank Otomasyon Platformu</p>
+            <p>Web Otomasyon Test Platformu</p>
         </div>
 
         <div class="input-group">
             <label>Hedef URL</label>
-            <input type="text" id="url" placeholder="https://www.vakifbank.com.tr">
+            <input type="text" id="url" placeholder="https://example.com">
         </div>
 
         <div class="input-group">
@@ -98,6 +98,7 @@
         </div>
 
         <div class="toggles">
+            <label><input type="checkbox" id="useGrid"> ☁️ Uzak Sunucuda (Selenium Grid) Çalıştır</label>
             <label><input type="checkbox" id="video" checked> Hatada Video</label>
             <label><input type="checkbox" id="screenshot" checked> Hatada Ekran Görüntüsü</label>
         </div>
@@ -234,9 +235,13 @@
         reportBtn.style.display = "none";
         statusSpan.style.color = "#facc15"; statusSpan.innerText = "Yürütülüyor...";
 
-        socket.emit('start_test', { url, prompt, 
+        // YENİ: useGrid verisi okunup backend'e gönderiliyor
+        socket.emit('start_test', { 
+            url, 
+            prompt, 
             video: document.getElementById('video').checked, 
-            screenshot: document.getElementById('screenshot').checked 
+            screenshot: document.getElementById('screenshot').checked,
+            useGrid: document.getElementById('useGrid').checked
         });
     }
 

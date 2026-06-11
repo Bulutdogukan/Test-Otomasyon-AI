@@ -1,5 +1,5 @@
 {
-  "name": "vakifbank-qa-automation",
+  "name": "web-automation-testing",
   "version": "2.0.0",
   "description": "AI-Powered Autonomous Test Automation Platform for Web Applications",
   "main": "server.js",

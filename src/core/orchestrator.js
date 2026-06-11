@@ -1,22 +1,19 @@
 const fs = require('fs');
 const path = require('path');
 const { spawn } = require('child_process');
-const { logInfo, logSuccess, logError } = require('../utils/logger');
-const { discoverAndSaveDOM } = require('../services/dom.service');
-const { agentPlanTest, agentGenerateJSON } = require('../services/ai.service');
+const { chromium } = require('@playwright/test');
+const { logInfo, logSuccess, logError, logWarning } = require('../utils/logger');
+const { agentPlanTest, agentGetNextStep } = require('../services/ai.service');
 const { compilePlaywrightCode } = require('../services/compiler.service');
 
-// Ortam Ayarları ve Yollar
 const OLLAMA_MODEL = process.env.OLLAMA_MODEL || "qwen2.5-coder:7b"; 
 const OLLAMA_URL = process.env.OLLAMA_URL || "http://127.0.0.1:11434/api/chat";
 const PROJECT_ROOT = path.join(__dirname, '../../');
 const TESTS_DIR = path.join(PROJECT_ROOT, 'tests');
 
-// Dosya Yolları
 const TEST_FILE = path.join(TESTS_DIR, 'ai_generated.spec.ts');
 const FEATURE_FILE = path.join(TESTS_DIR, 'ai_generated.feature');
 
-// Temizlik Fonksiyonu
 function cleanPreviousState() {
     const dirsToClean = ['allure-results', 'allure-report', 'playwright-report', 'test-results'];
     dirsToClean.forEach(dir => {
@@ -27,87 +24,147 @@ function cleanPreviousState() {
     if (fs.existsSync(TEST_FILE)) fs.unlinkSync(TEST_FILE);
 }
 
-// Ana Boru Hattı (Pipeline)
+// Canlı sayfadan DOM çıkartan sistem fonksiyonu
+async function scanLivePage(page) {
+    return await page.evaluate(() => {
+        const selectors = 'input, button, a, select, textarea, [role="button"], [role="link"], [onclick], [data-test], [data-testid], [data-qa], [aria-label], [placeholder], [title]';
+        const elements = Array.from(document.querySelectorAll(selectors));
+        const kvMap = {};
+
+        elements.forEach((el, index) => {
+            const rect = el.getBoundingClientRect();
+            const isAd = el.closest('[id*="ad"], [class*="ad-"], [class*="sponsored"], [class*="promo"], [class*="reklam"]');
+            if (rect.width > 5 && rect.height > 5 && el.offsetParent !== null && !isAd) {
+                const tag = el.tagName.toLowerCase();
+                const role = el.getAttribute('role') || '';
+                const text = (el.innerText || '').trim().replace(/\n/g, ' ').slice(0, 60);
+                const ariaLabel = el.getAttribute('aria-label') || '';
+                const title = el.getAttribute('title') || '';
+                const placeholder = el.getAttribute('placeholder') || '';
+                const alt = el.getAttribute('alt') || '';
+                const name = el.getAttribute('name') || '';
+                const id = el.id || '';
+                const href = el.getAttribute('href') || '';
+
+                let locator = '';
+                if (id) locator = `#${id}`;
+                else if (name) locator = `[name="${name}"]`;
+                else if (placeholder) locator = `[placeholder="${placeholder}"]`;
+                else if (ariaLabel) locator = `[aria-label="${ariaLabel}"]`;
+                else if (title) locator = `[title="${title}"]`;
+                else if (tag === 'a' && href) locator = `a[href="${href}"]`;
+                else if (text) locator = `text="${text}"`;
+                else locator = `:nth-match(${tag}, ${index + 1})`;
+
+                let label = '';
+                if (tag === 'input' || tag === 'textarea') label = `[Giriş Kutusu] ${placeholder || ariaLabel || title || name || id || 'Alan'}`;
+                else if (tag === 'button' || role === 'button') label = `[Buton] ${text || ariaLabel || title || id || name}`;
+                else if (tag === 'a' || role === 'link') label = `[Link] ${text || ariaLabel || title || href}`;
+                else label = `[Element] ${title || ariaLabel || placeholder || text || alt || id || name}`;
+
+                label = label.slice(0, 80).replace(/\n/g, ' ').trim();
+                if (locator && !kvMap[label]) kvMap[label] = locator;
+            }
+        });
+        return kvMap;
+    });
+}
+
 async function executeAutonomousFlow(url, userPrompt) {
     try {
         if (!url.startsWith('http://') && !url.startsWith('https://')) url = 'https://' + url;
-
-        // 1. Temizlik
         cleanPreviousState();
         
-        // 2. DOM Çekimi (YENİ: server.js ile uyumlu GRID_URL kullanılıyor)
-        const gridEndpoint = process.env.GRID_URL || process.env.SELENIUM_GRID_URL;
-        const liveDOM = await discoverAndSaveDOM(url, gridEndpoint);
-        
-        // 3. AI Planlama (Gherkin)
+        // 1. Planlama
         const testPlan = await agentPlanTest(userPrompt, OLLAMA_MODEL, OLLAMA_URL);
-        
-        // Gherkin dosyasını fiziksel olarak diske yaz.
         fs.writeFileSync(FEATURE_FILE, testPlan);
+
+        // 2. KEŞİF (EXPLORATION) AŞAMASI
+        logInfo('🕵️', `AI Keşif Modu Başlatılıyor... Tarayıcı bağlanıyor.`);
+        const browser = await chromium.launch({ headless: false, args: ['--start-maximized'] });
+        const context = await browser.newContext({ viewport: null });
         
-        // ------------------------------------------------------------------
-        // YENİ MİMARİ: Güvenli, Hızlı ve Fallback Destekli Sıralı İşleme
-        // ------------------------------------------------------------------
-        const scenarioRegex = /(?:Scenario|Senaryo):[\s\S]*?(?=(?:\n\s*(?:Scenario|Senaryo):|$))/gi;
-        let scenarios = testPlan.match(scenarioRegex);
-        let combinedTests = [];
-
-        if (!scenarios || scenarios.length === 0) scenarios = [testPlan];
-
-        logInfo('🔄 [3.5/5]', `Toplam ${scenarios.length} senaryo bulundu. SIRALI işleme başlıyor...`);
-
-        // JSON ayıklama işlemini kod tekrarını önlemek için metoda aldık
-        const processJSONData = (jsonCode, index) => {
-            const cleanJson = jsonCode.replace(/```json/gi, '').replace(/```/g, '').trim();
-            const parsedData = JSON.parse(cleanJson);
-
-            if (parsedData.tests && Array.isArray(parsedData.tests)) {
-                combinedTests.push(...parsedData.tests);
-            } else if (parsedData.steps) {
-                combinedTests.push({ title: `Senaryo ${index + 1}`, steps: parsedData.steps });
-            } else if (Array.isArray(parsedData)) {
-                combinedTests.push({ title: `Senaryo ${index + 1}`, steps: parsedData });
+        // ⚠️ YENİ: Dinamik Aktif Sekme Yönetimi
+        let activePage = await context.newPage();
+        
+        context.on('page', async newPage => {
+            logWarning(`✨ Yeni bir sekme/pencere açıldı! Ajanın odak noktası yeni sekmeye kaydırılıyor.`);
+            try {
+                await newPage.waitForLoadState('domcontentloaded', { timeout: 10000 });
+                activePage = newPage; // Otonom şef artık yeni sayfayı yönetecek
+            } catch(e) {
+                logError(`Yeni sekme yüklenirken süre aşımı oluştu.`);
             }
-        };
+        });
 
-        // Belleği (VRAM) şişirmemek için istekleri sırayla (await) atıyoruz.
-        for (let i = 0; i < scenarios.length; i++) {
-            logInfo('🧠', `=> İşlenen Senaryo ${i + 1}/${scenarios.length}`);
-            const singleScenario = scenarios[i].trim();
+        await activePage.goto(url, { waitUntil: 'domcontentloaded' });
+
+        let isDone = false;
+        let loopCount = 0;
+        const maxLoops = 15;
+        const stepHistory = [];
+
+        while (!isDone && loopCount < maxLoops) {
+            logInfo('🔍', `[Adım ${loopCount + 1}] Canlı Ekran DOM Haritası Çıkarılıyor...`);
+            // Her döngüde activePage taranıyor (Sekme değiştiyse yeni sekme taranır!)
+            const domMap = await scanLivePage(activePage);
+            const domData = JSON.stringify(domMap, null, 2);
+
+            logInfo('🧠', `Agent 2 (Locator) hedefe ulaşmak için Düşünüyor...`);
+            const nextStep = await agentGetNextStep(testPlan, domData, stepHistory, OLLAMA_MODEL, OLLAMA_URL);
+            
+            if (nextStep.action === 'DONE' || nextStep.action === 'done' || nextStep.action === 'BİTTİ') {
+                logSuccess('✅', 'AI: Senaryo hedefine ulaşıldı!');
+                break;
+            }
+
+            // Otonom Çevirici: AI Label verirse CSS'e çevirir
+            let safeLocator = domMap[nextStep.locator] ? domMap[nextStep.locator] : nextStep.locator;
+            logInfo('🎯', `Eylem Uygulanıyor: [${nextStep.action.toUpperCase()}] -> ${safeLocator}`);
 
             try {
-                // 1. DENEME: Ana Model (Örn: 32B veya 7B)
-                const jsonCode = await agentGenerateJSON(singleScenario, liveDOM, OLLAMA_MODEL, OLLAMA_URL);
-                processJSONData(jsonCode, i);
-            } catch (e) {
-                logError(`❌ Ana model senaryoyu çözemedi. Yedek modele (14B) geçiliyor... Hata: ${e.message}`);
-                
+                if (nextStep.action === 'click') {
+                    await activePage.click(safeLocator, { timeout: 10000 });
+                } else if (nextStep.action === 'fill') {
+                    let val = nextStep.value === 'RANDOM_EMAIL' ? `test_${Date.now()}@mail.com` : nextStep.value;
+                    await activePage.fill(safeLocator, val, { timeout: 10000 });
+                    nextStep.value = val; 
+                } else if (nextStep.action === 'press') {
+                    await activePage.keyboard.press(nextStep.value || 'Enter');
+                } else if (nextStep.action === 'select') {
+                    await activePage.selectOption(safeLocator, nextStep.value, { timeout: 10000 });
+                }
+            } catch (err) {
+                logWarning(`Elemente doğrudan müdahale edilemedi. Alternatif metin araması deneniyor...`);
                 try {
-                    // 2. DENEME: Fallback Mekanizması (Graceful Degradation)
-                    const fallbackModel = "qwen2.5-coder:14b"; // Donanımını yormayacak cankurtaran model
-                    const jsonCodeFallback = await agentGenerateJSON(singleScenario, liveDOM, fallbackModel, OLLAMA_URL);
-                    processJSONData(jsonCodeFallback, i);
-                    logSuccess('🛟', `Senaryo ${i + 1} yedek model (${fallbackModel}) ile başarıyla kurtarıldı!`);
+                    if (nextStep.action === 'click') await activePage.click(`text="${safeLocator}"`, { timeout: 5000 });
                 } catch (fallbackErr) {
-                    logError(`❌ Yedek model de başarısız oldu. Senaryo ${i + 1} atlanıyor.`);
+                    logError('Adım yürütülemedi. Keşif durduruluyor.');
+                    break; 
                 }
             }
+
+            stepHistory.push({ action: nextStep.action, locator: safeLocator, value: nextStep.value });
+            loopCount++;
+            
+            // Sayfanın kendine gelmesi ve yeni elementlerin oturması için bekleme süresi
+            await activePage.waitForTimeout(3000); 
         }
 
-        if (combinedTests.length === 0) throw new Error("Hiçbir senaryo çözülemedi.");
-        const finalJSON = JSON.stringify({ tests: combinedTests });
-        
-        // 5. Derleme (TS Code)
-        compilePlaywrightCode(finalJSON, url, TEST_FILE);
+        await browser.close();
 
-        // 6. Test Koşusu
-        logInfo('⚙️ [5/5]', `Playwright Test Runner Başlatılıyor...`);
+        // 3. DERLEME (COMPILATION) AŞAMASI
+        logInfo('🧹', 'Keşif tamamlandı. Hızlı ve Kalıcı Test Senaryosu derleniyor...');
+        compilePlaywrightCode(stepHistory, url, testPlan, TEST_FILE);
+
+        // 4. TEST KOŞUSU VE RAPORLAMA
+        logInfo('⚙️', `Playwright Statik Test Runner Başlatılıyor...`);
         return new Promise((resolve, reject) => {
-            // Çevre değişkenleri Playwright ve Grid için dinamik olarak besleniyor
             const envVars = { ...process.env, FORCE_COLOR: "1" };
+            const npxCmd = process.platform === 'win32' ? 'npx.cmd' : 'npx';
             
-            const testProcess = spawn('npx', ['playwright', 'test', 'tests/ai_generated.spec.ts', '--reporter=line,allure-playwright', '--workers=1'], {
-                env: envVars
+            const testProcess = spawn(npxCmd, ['playwright', 'test', 'tests/ai_generated.spec.ts', '--reporter=list,allure-playwright', '--workers=1'], {
+                env: envVars, shell: true 
             });
 
             testProcess.stdout.on('data', (data) => process.stdout.write(data.toString()));
@@ -115,10 +172,9 @@ async function executeAutonomousFlow(url, userPrompt) {
 
             testProcess.on('close', (code) => {
                 logInfo('📊', `Allure raporu derleniyor...`);
-                const allureProcess = spawn('npx', ['allure', 'generate', './allure-results', '-o', './allure-report', '--clean']);
-                
+                const allureProcess = spawn(npxCmd, ['allure', 'generate', './allure-results', '-o', './allure-report', '--clean'], { shell: true });
                 allureProcess.on('close', () => {
-                    logSuccess('✅', `Rapor hazırlandı. Döngü tamamlandı.`);
+                    logSuccess('✅', `Rapor hazırlandı. Boru Hattı (Pipeline) tamamlandı.`);
                     resolve(code);
                 });
             });

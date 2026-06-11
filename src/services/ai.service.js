@@ -27,7 +27,7 @@ CRITICAL BDD RULES:
 ONLY output text starting with 'Feature:'.`;
 
     const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 120000); // 2 dakika timeout
+    const timeout = setTimeout(() => controller.abort(), 120000); 
 
     try {
         const response = await fetch(apiUrl, {
@@ -40,8 +40,7 @@ ONLY output text starting with 'Feature:'.`;
                     { role: 'user', content: `Raw Scenario: ${userScenario}` }
                 ],
                 stream: false,
-                // YENİ: VRAM koruması için num_ctx eklendi
-                options: { temperature: 0.0, top_p: 0.1, max_tokens: 700, num_ctx: 8192 }
+                options: { temperature: 0.0, top_p: 0.1, max_tokens: 700, num_ctx: 4096 }
             }),
             signal: controller.signal
         });
@@ -74,53 +73,39 @@ ONLY output text starting with 'Feature:'.`;
     }
 }
 
-async function agentGenerateJSON(testPlan, domData, model, apiUrl) {
-    logInfo('🧠 [3/5]', `Agent 2 (Locator): Key-Value Sözlüğü ile planı eşleştiriyor...`);
+// YENİ MİMARİ: Adım Adım Düşünen Otonom Ajan
+async function agentGetNextStep(testPlan, domData, stepHistory, model, apiUrl) {
+    logInfo('🧠', `Agent 2 (Locator): Güncel ekrana bakarak sıradaki hamleyi düşünüyor...`);
     
-    const systemPrompt = `You are a strict JSON Compiler. You CANNOT converse. You CANNOT apologize. You ONLY return valid JSON.`;
+    const systemPrompt = `You are an Autonomous QA Agent executing a test step-by-step. You CANNOT converse. You ONLY return a SINGLE JSON object.`;
     
-    const userPrompt = `TEST PLAN:
+    // ⚠️ YENİ: CSS kullanması yönündeki KESİN UYARI
+    const userPrompt = `GOAL (TEST PLAN):
 ${testPlan}
 
-ELEMENT DICTIONARY:
+HISTORY (STEPS ALREADY EXECUTED):
+${JSON.stringify(stepHistory, null, 2)}
+
+CURRENT SCREEN (ELEMENT DICTIONARY):
 ${domData}
 
 CRITICAL INSTRUCTIONS:
-1. MULTI-SCENARIO SUPPORT: The TEST PLAN may contain multiple scenarios. You MUST process each scenario and return them in a "tests" array.
-2. STATIC LOCATOR RULE: If the element is in the dictionary, use its CSS Locator (the Value) EXACTLY AS WRITTEN. Do NOT wrap 'text="..."' locators in square brackets!
-3. ESCAPE HATCH: If dynamic (next page), use Playwright pseudo-selectors like ":nth-match(a, 1)".
-4. ALLOWED ACTIONS: "click", "fill", "press", "select".
-5. ONLY output raw valid JSON and do NOT include markdown code fences.
-
-EXAMPLE DICTIONARY:
-{
-  "[Buton] Giris Yap": "#login-btn",
-  "[Giriş Kutusu] Arama": "[placeholder='Ara']"
-}
+1. Analyze the GOAL and the HISTORY to understand what needs to be done next.
+2. Look at the CURRENT SCREEN dictionary. You MUST return the CSS LOCATOR (the VALUE). NEVER return the descriptive label (the KEY).
+   - RIGHT: "#user-name"
+   - WRONG: "[Giriş Kutusu] Username"
+3. If the GOAL is completely achieved based on the HISTORY and CURRENT SCREEN, return: { "action": "DONE" }
+4. Otherwise, return ONLY ONE JSON object for the NEXT immediate step.
+5. ALLOWED ACTIONS: "click", "fill", "press", "select".
+6. ONLY output raw valid JSON. Do not include markdown code fences.
 
 EXAMPLE VALID JSON OUTPUT:
-{
-  "tests": [
-    {
-      "title": "Giriş Yapma Senaryosu",
-      "steps": [
-        { "action": "fill", "locator": "[placeholder='Ara']", "value": "iphone" },
-        { "action": "click", "locator": "#login-btn" }
-      ]
-    },
-    {
-      "title": "Ürün Seçme Senaryosu",
-      "steps": [
-        { "action": "click", "locator": ":nth-match(a, 1)" }
-      ]
-    }
-  ]
-}
+{ "action": "fill", "locator": "#user-name", "value": "standard_user" }
 
-GENERATE JSON FOR THE TEST PLAN NOW:`;
+GENERATE THE NEXT STEP NOW:`;
 
     const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 120000); // 2 dakika timeout
+    const timeout = setTimeout(() => controller.abort(), 60000); 
     let attempts = 0;
 
     while (attempts < 2) {
@@ -135,8 +120,7 @@ GENERATE JSON FOR THE TEST PLAN NOW:`;
                         { role: 'user', content: userPrompt }
                     ],
                     stream: false,
-                    // YENİ: VRAM koruması için num_ctx eklendi
-                    options: { temperature: 0.0, top_p: 0.1, max_tokens: 900, num_ctx: 8192 }
+                    options: { temperature: 0.0, top_p: 0.1, max_tokens: 300, num_ctx: 4096 } 
                 }),
                 signal: controller.signal
             });
@@ -144,34 +128,28 @@ GENERATE JSON FOR THE TEST PLAN NOW:`;
 
             if (!response.ok) {
                 const errText = await response.text();
-                throw new Error(`Agent 2 API Hatası (HTTP ${response.status}): ${errText}`);
+                throw new Error(`Agent 2 API Hatası: ${errText}`);
             }
 
             const data = await response.json();
-            if (data.error) throw new Error(`Ollama Hatası: ${data.error}`);
-            if (!data.message || typeof data.message.content === 'undefined') {
-                throw new Error(`Beklenmeyen API Yanıtı Formatı: ${JSON.stringify(data)}`);
-            }
-
-            const rawOutput = data.message.content;
-            if (!isValidTestJSON(rawOutput)) {
+            const rawOutput = cleanModelOutput(data.message.content);
+            
+            try {
+                const stepJson = JSON.parse(rawOutput);
+                if (!stepJson.action) throw new Error("JSON'da action alanı yok.");
+                return stepJson; // Başarılıysa doğrudan JS objesi döner
+            } catch (parseErr) {
                 attempts += 1;
-                if (attempts >= 2) {
-                    throw new Error('Agent 2 çıktısı geçerli JSON formatında değil. Çıktı:\n' + rawOutput);
-                }
-                logInfo('⚠️', `Agent 2 çıktısı doğrulanamadı. Tekrar deneniyor (${attempts + 1}/2)...`);
-                continue;
+                logInfo('⚠️', `Agent 2 JSON formatını bozdu. Tekrar deneniyor...`);
+                if (attempts >= 2) throw new Error(`Agent 2 geçerli JSON üretemedi: ${rawOutput}`);
             }
 
-            return rawOutput;
         } catch (err) {
             clearTimeout(timeout);
-            if (err.name === 'AbortError') {
-                throw new Error('Agent 2 timeout: Ollama 2 dakika içinde yanıt vermedi');
-            }
+            if (err.name === 'AbortError') throw new Error('Agent 2 timeout yedi.');
             throw err;
         }
     }
 }
 
-module.exports = { agentPlanTest, agentGenerateJSON };
+module.exports = { agentPlanTest, agentGetNextStep };

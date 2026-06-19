@@ -1,9 +1,9 @@
 @echo off
-title Vakifbank QA AI Panel
+title Otonom Test Merkezi
 color 0E
 
 echo ==================================================
-echo       VAKIFBANK OTONOM TEST MERKEZI BASLATILIYOR
+echo        OTONOM TEST MERKEZI BASLATILIYOR
 echo ==================================================
 echo Lutfen testler bitene kadar bu pencereyi KAPATMAYIN!
 echo.

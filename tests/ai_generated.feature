@@ -1,8 +1,7 @@
-Feature: Kullanıcı oturum açıp Twitter bağlantısını test eder
+Feature: Kullanıcı sisteme giriş yaparak ürünleri sepete ekleyebilir
 
-Scenario: Başarılı kullanıcı giriş ve Twitter bağlantısı
-Given kullanıcı adı kutusuna "standard_user" yazar
-And şifre kutusuna "secret_sauce" yazar
-When login butonuna tıklar
-Then sayfadaki Twitter linkine tıklar
-And Twitter sayfasına yönlendirildiğini doğrular
+Scenario: Standard kullanıcı sisteme giriş yapar ve ilk ürünü sepete ekler
+    Given standard_user adı ve secret_sauce şifresi ile sistemde oturum açılır
+    When ilk ürünü 'Add to cart' butonuna tıklanır
+    Then ürün sepete eklendiğini doğrulanır
+    And test sonlandırılır

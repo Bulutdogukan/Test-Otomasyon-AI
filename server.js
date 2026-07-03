@@ -16,6 +16,20 @@ if (!process.env.OLLAMA_URL || !process.env.OLLAMA_MODEL) {
 
 const { executeAutonomousFlow } = require('./src/core/orchestrator');
 
+// ⚠️ DÜZELTME: Süreç seviyesinde güvenlik ağı. İşlenmemiş promise reddi veya
+// yakalanmamış istisna artık sunucuyu sessizce kilitlemez/çökertmez; loglanır.
+process.on('unhandledRejection', (reason) => {
+    console.error('\n⚠️ İŞLENMEMİŞ PROMISE REDDİ:', reason instanceof Error ? reason.stack : reason);
+});
+process.on('uncaughtException', (err) => {
+    console.error('\n💥 YAKALANMAMIŞ İSTİSNA:', err && err.stack ? err.stack : err);
+});
+
+// ⚠️ DÜZELTME: Eşzamanlılık kilidi. Orchestrator sabit dosya yollarına
+// (ai_generated.spec.ts) ve global process.env'e yazdığından, paralel akışlar
+// birbirinin durumunu/çıktısını bozardı. Aynı anda tek akışa izin veriyoruz.
+let isFlowRunning = false;
+
 const app = express();
 const server = http.createServer(app);
 const io = new Server(server);
@@ -42,6 +56,15 @@ app.post('/upload', upload.single('scenarioFile'), (req, res) => {
 
 io.on('connection', (socket) => {
     socket.on('start_test', async (data) => {
+        // ⚠️ DÜZELTME: Bir akış çalışırken gelen ikinci istek, stdout hook'u kurulmadan
+        // ÖNCE reddedilir (aksi halde hook'lar çakışır, dosyalar ezişir).
+        if (isFlowRunning) {
+            socket.emit('log', `\n⛔ Şu anda başka bir test akışı çalışıyor. Lütfen tamamlanmasını bekleyip tekrar deneyin.\n`);
+            socket.emit('test_finished');
+            return;
+        }
+        isFlowRunning = true;
+
         const { url, prompt, video, screenshot, useGrid } = data;
 
         // BÜTÜNLEŞTİRİCİ GRID ATAMASI: Hem DOM (orchestrator) hem Playwright (compiler) için
@@ -93,8 +116,9 @@ io.on('connection', (socket) => {
             socket.emit('log', `\n❌ AKIŞ DURDURULDU: ${error.message}\n`);
             socket.emit('test_finished'); // Hata alsa bile butonu aktif et
         } finally {
-            // Hook'u kapat
+            // Hook'u kapat ve eşzamanlılık kilidini serbest bırak
             process.stdout.write = originalStdoutWrite;
+            isFlowRunning = false;
         }
     });
 

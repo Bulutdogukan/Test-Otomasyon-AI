@@ -1,6 +1,11 @@
 const fs = require('fs');
 const { logInfo, logSuccess } = require('../utils/logger');
 
+// URL assertion'ı için kullanıcı/LLM metnini güvenli bir regex literaline çevirir.
+function escapeRegExp(s) {
+    return String(s).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
 function compilePlaywrightCode(stepHistory, url, testPlan, testFilePath) {
     logInfo('🧹', `Adım hafızası Playwright betiğine dönüştürülüyor...`);
     
@@ -20,24 +25,44 @@ function compilePlaywrightCode(stepHistory, url, testPlan, testFilePath) {
     tsCode += `  */\n\n`;
     
     tsCode += `  test('Keşfedilen ve Doğrulanan Adımlar', async ({ page }) => {\n`;
-    tsCode += `    await page.goto('${url}');\n\n`;
+    tsCode += `    await page.goto(${JSON.stringify(url)});\n\n`;
 
     stepHistory.forEach((step, index) => {
         tsCode += `    // Adım ${index + 1}: [${step.action.toUpperCase()}] İşlemi\n`;
-        let loc = step.locator ? step.locator.replace(/'/g, "\\'") : 'body'; 
-        
+        // ⚠️ DÜZELTME: LLM çıktısı GÜVENİLMEYEN girdidir. Tek tırnak değiştirme yetersizdi
+        // (backtick, newline, ') ile betiğe kod enjekte edilebilirdi). JSON.stringify ile
+        // tam kaçışlı, geçerli bir string literal üretiyoruz.
+        const locLit = JSON.stringify(step.locator || 'body');
+
+        // ⚠️ DÜZELTME: { force: true } kaldırıldı. Görünürlük/etkileşilebilirlik
+        // kontrollerini bypass etmek yanlış-pozitif (false positive) testler üretiyordu.
         if (step.action === 'click') {
-            tsCode += `    await page.locator('${loc}').first().click({ force: true });\n`;
+            tsCode += `    await page.locator(${locLit}).first().click();\n`;
         } else if (step.action === 'hover') {
-            tsCode += `    await page.locator('${loc}').first().hover({ force: true });\n`;
+            tsCode += `    await page.locator(${locLit}).first().hover();\n`;
         } else if (step.action === 'fill') {
-            let val = step.value ? step.value.replace(/'/g, "\\'") : '';
-            tsCode += `    await page.locator('${loc}').first().fill('${val}', { force: true });\n`;
+            const valLit = JSON.stringify(step.value || '');
+            tsCode += `    await page.locator(${locLit}).first().fill(${valLit});\n`;
         } else if (step.action === 'press') {
-            tsCode += `    await page.keyboard.press('${step.value}');\n`;
+            const keyLit = JSON.stringify(step.value || 'Enter');
+            tsCode += `    await page.keyboard.press(${keyLit});\n`;
         } else if (step.action === 'select') {
-            let val = step.value ? step.value.replace(/'/g, "\\'") : '';
-            tsCode += `    await page.locator('${loc}').first().selectOption('${val}');\n`;
+            const valLit = JSON.stringify(step.value || '');
+            tsCode += `    await page.locator(${locLit}).first().selectOption(${valLit});\n`;
+        } else if (step.action === 'assert') {
+            // ⚡ FAZ 2: Otomatik doğrulama (assertion). Test artık sadece akışı
+            // simüle etmiyor; sonucu gerçekten doğruluyor.
+            const assertType = step.assertType || 'visible';
+            const expLit = JSON.stringify(step.expected || '');
+            if (assertType === 'url') {
+                tsCode += `    await expect(page).toHaveURL(new RegExp(${JSON.stringify(escapeRegExp(step.expected || ''))}));\n`;
+            } else if (assertType === 'text') {
+                tsCode += `    await expect(page.locator(${locLit}).first()).toContainText(${expLit});\n`;
+            } else if (assertType === 'value') {
+                tsCode += `    await expect(page.locator(${locLit}).first()).toHaveValue(${expLit});\n`;
+            } else {
+                tsCode += `    await expect(page.locator(${locLit}).first()).toBeVisible();\n`;
+            }
         }
         tsCode += `    await page.waitForTimeout(1000);\n\n`;
     });

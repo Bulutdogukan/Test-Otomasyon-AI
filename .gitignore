@@ -1,7 +1,15 @@
 node_modules/
 .env
+.DS_Store
+
+# Playwright / Allure çıktıları
 allure-results/
+allure-report/
 playwright-report/
 test-results/
+
+# AI tarafından üretilen betik (her koşuda yeniden yazılır)
 tests/ai_generated.spec.ts
-allure-report/
+
+# Yüklenen geçici senaryo dosyaları
+uploads/

@@ -34,7 +34,14 @@ const app = express();
 const server = http.createServer(app);
 const io = new Server(server);
 
-const upload = multer({ dest: 'uploads/' });
+const upload = multer({
+    dest: 'uploads/',
+    limits: { fileSize: 1 * 1024 * 1024 }, // 1 MB üst sınır
+    fileFilter: (req, file, cb) => {
+        const ok = /\.(txt|feature|md)$/i.test(file.originalname);
+        cb(ok ? null : new Error('Sadece .txt, .feature veya .md dosyaları kabul edilir.'), ok);
+    }
+});
 
 app.use(express.static(path.join(__dirname, 'public')));
 app.use('/allure', express.static(path.join(__dirname, 'allure-report')));
@@ -43,15 +50,19 @@ app.use(express.json());
 // Console logları arayüze basmak için process.stdout'u hookluyoruz (Geçici yönlendirme)
 const originalStdoutWrite = process.stdout.write.bind(process.stdout);
 
-app.post('/upload', upload.single('scenarioFile'), (req, res) => {
-    if (!req.file) return res.status(400).json({ error: 'Dosya bulunamadı.' });
-    try {
-        const fileContent = fs.readFileSync(req.file.path, 'utf-8');
-        fs.unlinkSync(req.file.path); 
-        res.json({ content: fileContent });
-    } catch (err) {
-        res.status(500).json({ error: 'Dosya okunamadı: ' + err.message });
-    }
+app.post('/upload', (req, res) => {
+    // multer'ı manuel çağırıp boyut/tip hatalarını 400 ile düzgün döndürüyoruz (aksi halde 500).
+    upload.single('scenarioFile')(req, res, (uploadErr) => {
+        if (uploadErr) return res.status(400).json({ error: uploadErr.message });
+        if (!req.file) return res.status(400).json({ error: 'Dosya bulunamadı.' });
+        try {
+            const fileContent = fs.readFileSync(req.file.path, 'utf-8');
+            fs.unlinkSync(req.file.path);
+            res.json({ content: fileContent });
+        } catch (err) {
+            res.status(500).json({ error: 'Dosya okunamadı: ' + err.message });
+        }
+    });
 });
 
 io.on('connection', (socket) => {

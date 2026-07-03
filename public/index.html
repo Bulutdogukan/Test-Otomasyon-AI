@@ -147,7 +147,9 @@
 
     // Socket Eventleri (Merkezi Konum)
     socket.on('log', (msg) => {
-        terminal.innerHTML += msg.replace(/\x1b\[[0-9;]*m/g, ''); 
+        // 🔒 Güvenlik: log içeriği hedef siteden/AI'dan gelir. innerHTML yerine metin olarak
+        // eklenir; aksi halde element metnindeki <script>/<img onerror> gibi içerik XSS'e yol açardı.
+        terminal.insertAdjacentText('beforeend', msg.replace(/\x1b\[[0-9;]*m/g, ''));
         terminal.scrollTop = terminal.scrollHeight;
     });
 

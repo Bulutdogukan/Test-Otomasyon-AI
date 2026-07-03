@@ -19,8 +19,8 @@ export default defineConfig({
     ['allure-playwright'] //
   ], 
   use: { 
-    baseURL: process.env.BASE_URL, 
-    trace: 'on', 
+    baseURL: process.env.BASE_URL,
+    trace: 'retain-on-failure', // Ölçeklenmede 'on' ağır disk/performans yükü yaratır
     // AI-Agent'tan gelen E/H komutlarını doğrudan Playwright'a bağlıyoruz
     video: (process.env.SAVE_VIDEO as any) || 'off',
     screenshot: (process.env.SAVE_SCREENSHOT as any) || 'only-on-failure',
@@ -30,8 +30,9 @@ export default defineConfig({
   projects: [
     // ── MASAÜSTÜ TARAYICILAR ──
     {
-      name: 'Google Chrome',
-      use: { ...devices['Desktop Chrome'], channel: 'chrome' }, // Gerçek Chrome motoru
+      name: 'Chromium',
+      // Paketli Chromium — orchestrator keşif motoruyla tutarlı; harici Google Chrome kurulumu gerektirmez.
+      use: { ...devices['Desktop Chrome'] },
     },
     /*
     {

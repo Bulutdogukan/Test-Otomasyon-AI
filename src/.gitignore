@@ -1,9 +1,0 @@
-node_modules/
-.env
-test-results/
-playwright-report/
-allure-results/
-allure-report/
-tests/ai_generated.spec.ts
-tests/ai_generated.feature
-.DS_Store

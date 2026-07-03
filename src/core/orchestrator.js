@@ -82,15 +82,19 @@ async function scanLivePage(page) {
 
 // FAZ 3: Eylem yürütme tek yere toplandı — ilk deneme ve self-healing retry'ı
 // aynı kodu paylaşır (davranış sapması / çift bakım riski ortadan kalkar).
-async function executeAction(page, action, locator, value) {
+async function executeAction(page, action, locator, value, opts = {}) {
     if (action === 'click') {
         await page.click(locator, { timeout: 10000 });
     } else if (action === 'fill') {
         await page.fill(locator, value, { timeout: 10000 });
     } else if (action === 'press') {
-        await page.keyboard.press(value || 'Enter');
+        await page.keyboard.press(value || 'Enter'); // "Control+A" gibi kombinasyonları da destekler
     } else if (action === 'select') {
         await page.selectOption(locator, value, { timeout: 10000 });
+    } else if (action === 'hover') {
+        await page.hover(locator, { timeout: 10000 });
+    } else if (action === 'dragAndDrop') {
+        await page.dragAndDrop(locator, opts.target, { timeout: 10000 });
     } else {
         throw new Error(`Bilinmeyen eylem tipi: ${action}`);
     }
@@ -164,6 +168,8 @@ async function executeAutonomousFlow(url, userPrompt, useGrid = false) {
 
             // Otonom Çevirici: AI Label verirse CSS'e çevirir
             let safeLocator = domMap[nextStep.locator] ? domMap[nextStep.locator] : nextStep.locator;
+            // FAZ 3.2: dragAndDrop hedef locator'ı da label->CSS çevrilir.
+            let safeTarget = nextStep.target ? (domMap[nextStep.target] || nextStep.target) : undefined;
             logInfo('🎯', `Eylem Uygulanıyor: [${nextStep.action.toUpperCase()}] -> ${safeLocator}`);
 
             // ⚡ FAZ 2: ASSERTION (Doğrulama) — locator hatasından farklı ele alınır.
@@ -200,7 +206,7 @@ async function executeAutonomousFlow(url, userPrompt, useGrid = false) {
             nextStep.value = resolvedValue;
 
             try {
-                await executeAction(activePage, nextStep.action, safeLocator, resolvedValue);
+                await executeAction(activePage, nextStep.action, safeLocator, resolvedValue, { target: safeTarget });
             } catch (err) {
                 // ⚡ FAZ 3: GERÇEK SELF-HEALING (sabit text-fallback yerine adaptif kurtarma).
                 // DOM YENİDEN taranır, LLM'den aynı niyete uyan alternatif locator istenir,
@@ -229,13 +235,15 @@ async function executeAutonomousFlow(url, userPrompt, useGrid = false) {
 
                         const healedLocator = freshMap[healedStep.locator] ? freshMap[healedStep.locator] : healedStep.locator;
                         const healedValue = healedStep.value != null ? healedStep.value : resolvedValue;
+                        const healedTarget = (healedStep.target != null) ? (freshMap[healedStep.target] || healedStep.target) : safeTarget;
                         logInfo('🩹', `Self-Healing denemesi ${healAttempt}: yeni locator -> ${healedLocator}`);
 
-                        await executeAction(activePage, nextStep.action, healedLocator, healedValue);
+                        await executeAction(activePage, nextStep.action, healedLocator, healedValue, { target: healedTarget });
 
                         // Başarılı: ÇALIŞAN locator/değer kaydedilir (derlenen test doğru olanı alır).
                         safeLocator = healedLocator;
                         nextStep.value = healedValue;
+                        safeTarget = healedTarget;
                         healed = true;
                         logSuccess('✅', `Self-Healing BAŞARILI! Adım kurtarıldı.`);
                     } catch (healErr) {
@@ -249,7 +257,7 @@ async function executeAutonomousFlow(url, userPrompt, useGrid = false) {
                 }
             }
 
-            stepHistory.push({ action: nextStep.action, locator: safeLocator, value: nextStep.value });
+            stepHistory.push({ action: nextStep.action, locator: safeLocator, value: nextStep.value, target: safeTarget });
             loopCount++;
             
             // Sayfanın kendine gelmesi ve yeni elementlerin oturması için bekleme süresi

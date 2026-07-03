@@ -146,13 +146,17 @@ CRITICAL INSTRUCTIONS:
    - WRONG: "[Giriş Kutusu] Username"
 3. If the GOAL is completely achieved based on the HISTORY and CURRENT SCREEN, return: { "action": "DONE" }
 4. Otherwise, return ONLY ONE JSON object for the NEXT immediate step.
-5. ALLOWED ACTIONS: "click", "fill", "press", "select", "assert".
-6. ASSERTIONS (VERIFICATION): A test without verification is worthless. Use "assert" to confirm the outcome of your actions. You SHOULD add at least one "assert" before returning DONE.
+5. ALLOWED ACTIONS: "click", "fill", "press", "select", "hover", "dragAndDrop", "assert".
+6. ADVANCED ACTIONS:
+   - "hover" -> move the mouse over an element: { "action": "hover", "locator": "#menu" }
+   - "dragAndDrop" -> drag an element onto another; REQUIRES a "target": { "action": "dragAndDrop", "locator": "#item1", "target": "#slot1" }
+   - "press" also supports key combinations: { "action": "press", "value": "Control+A" }
+7. ASSERTIONS (VERIFICATION): A test without verification is worthless. Use "assert" to confirm the outcome of your actions. You SHOULD add at least one "assert" before returning DONE.
    - "visible" -> element is present:  { "action": "assert", "locator": "#title", "assertType": "visible" }
    - "text"    -> element contains text: { "action": "assert", "locator": ".header", "assertType": "text", "expected": "Products" }
    - "value"   -> input holds a value:   { "action": "assert", "locator": "#user-name", "assertType": "value", "expected": "standard_user" }
    - "url"     -> URL contains text (no locator needed): { "action": "assert", "assertType": "url", "expected": "/inventory.html" }
-7. ONLY output raw valid JSON. Do not include markdown code fences.
+8. ONLY output raw valid JSON. Do not include markdown code fences.
 
 EXAMPLE VALID JSON OUTPUT:
 { "action": "fill", "locator": "#user-name", "value": "standard_user" }
@@ -187,7 +191,7 @@ CRITICAL INSTRUCTIONS:
 1. The previous locator did NOT work (element not found or not actionable). The page may have changed.
 2. Look at the CURRENT SCREEN and find the BEST element matching the SAME intent as the failed step.
 3. Return the CSS LOCATOR (the VALUE in the dictionary). NEVER return the label (the KEY).
-4. Keep the SAME "action". Keep a "value" ONLY if the action needs one (fill/select/press).
+4. Keep the SAME "action". Keep "value" only if needed (fill/select/press); keep "target" only for dragAndDrop.
 5. If NO suitable element exists on this screen, return: { "action": "GIVEUP" }
 6. ONLY output raw valid JSON. Do not include markdown code fences.
 

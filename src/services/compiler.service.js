@@ -49,6 +49,10 @@ function compilePlaywrightCode(stepHistory, url, testPlan, testFilePath) {
         } else if (step.action === 'select') {
             const valLit = JSON.stringify(step.value || '');
             tsCode += `    await page.locator(${locLit}).first().selectOption(${valLit});\n`;
+        } else if (step.action === 'dragAndDrop') {
+            // FAZ 3.2: kaynak -> hedef sürükle-bırak (iki selector alır).
+            const targetLit = JSON.stringify(step.target || 'body');
+            tsCode += `    await page.dragAndDrop(${locLit}, ${targetLit});\n`;
         } else if (step.action === 'assert') {
             // ⚡ FAZ 2: Otomatik doğrulama (assertion). Test artık sadece akışı
             // simüle etmiyor; sonucu gerçekten doğruluyor.

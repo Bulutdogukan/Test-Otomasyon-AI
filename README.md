@@ -264,3 +264,15 @@ Bu yapı aşağıdaki temel bileşenlerden oluşur:
 * Selenium fallback sistemi
 * Docker & Kubernetes deployment
 * AI destekli hata analizi
+
+---
+
+# 🌿 Geliştirme Dalları (Branch'ler)
+
+| Dal                             | Durum                     | Açıklama                                                                 |
+| -------------------------------- | ------------------------- | ------------------------------------------------------------------------ |
+| `main`                            | Kararlı / yayın           | Selenium Grid entegrasyonuna kadar olan kararlı sürüm.                   |
+| `refactor/stability-self-healing` | Geçmiş geliştirme         | Kararlılık düzeltmeleri, DOM chunking, self-healing ve eylem repertuarı (hover/dragAndDrop) çalışmalarının yapıldığı dal; `fix/security-and-cleanup` bu dalın devamıdır. |
+| `fix/security-and-cleanup`        | **Aktif geliştirme (güncel)** | Güvenlik/temizlik düzeltmeleri, self-healing ve keşif döngüsü iyileştirmeleri ile bu belgede anlatılan kalıcı Gherkin test kütüphanesi, tek tık paralel koşum ve çoklu makine (Mac Mini) desteğini içeren, üzerinde çalışılan güncel dal. |
+
+Yeni özellikler ve düzeltmeler şu an `fix/security-and-cleanup` dalına ekleniyor; `main`'e alınması ayrı bir PR/merge kararı gerektirir.

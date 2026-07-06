@@ -43,6 +43,9 @@
         .btn-start:disabled { background-color: #374151; color: #9ca3af; cursor: not-allowed; }
         .btn-report { background-color: transparent; color: #facc15; border: 1px solid #facc15; display: none; }
         .btn-report:hover { background-color: #facc15; color: #111827; }
+        .btn-runall { background-color: #34d399; color: #111827; }
+        .btn-runall:hover { background-color: #10b981; }
+        .btn-runall:disabled { background-color: #374151; color: #9ca3af; cursor: not-allowed; }
 
         /* Sağ Alan (Loglar & Kodlar) */
         .main-content { flex: 1; display: flex; flex-direction: column; background: #0b0f19; overflow: hidden; padding: 15px; gap: 15px; }
@@ -107,6 +110,9 @@
             <button id="startBtn" class="btn-start" onclick="startTest()">▶ Testi Başlat</button>
             <button id="reportBtn" class="btn-report" onclick="openReport()">📊 Rapor</button>
         </div>
+        <div class="btn-group">
+            <button id="runAllBtn" class="btn-runall" onclick="runAllTests()">▶▶ Tüm Testleri Paralel Çalıştır</button>
+        </div>
     </div>
 
     <div class="main-content">
@@ -140,6 +146,7 @@
     const terminal = document.getElementById('terminal');
     const startBtn = document.getElementById('startBtn');
     const reportBtn = document.getElementById('reportBtn');
+    const runAllBtn = document.getElementById('runAllBtn');
     const statusSpan = document.getElementById('status');
     const dropzoneText = document.getElementById('dropzoneText');
     const codeContainer = document.getElementById('codeContainer');
@@ -155,6 +162,14 @@
 
     socket.on('test_finished', () => {
         startBtn.disabled = false; startBtn.innerHTML = "▶ Yeni Test";
+        runAllBtn.disabled = false;
+        reportBtn.style.display = "block";
+        statusSpan.style.color = "#34d399"; statusSpan.innerText = "Tamamlandı";
+    });
+
+    socket.on('all_tests_finished', () => {
+        runAllBtn.disabled = false; runAllBtn.innerHTML = "▶▶ Tüm Testleri Paralel Çalıştır";
+        startBtn.disabled = false;
         reportBtn.style.display = "block";
         statusSpan.style.color = "#34d399"; statusSpan.innerText = "Tamamlandı";
     });
@@ -234,20 +249,30 @@
 
         terminal.innerHTML = ""; codeContainer.style.display = "none";
         startBtn.disabled = true; startBtn.innerHTML = "⏳ Test Ediliyor...";
+        runAllBtn.disabled = true;
         reportBtn.style.display = "none";
         statusSpan.style.color = "#facc15"; statusSpan.innerText = "Yürütülüyor...";
 
         // YENİ: useGrid verisi okunup backend'e gönderiliyor
-        socket.emit('start_test', { 
-            url, 
-            prompt, 
-            video: document.getElementById('video').checked, 
+        socket.emit('start_test', {
+            url,
+            prompt,
+            video: document.getElementById('video').checked,
             screenshot: document.getElementById('screenshot').checked,
             useGrid: document.getElementById('useGrid').checked
         });
     }
 
     function openReport() { socket.emit('open_report'); }
+
+    function runAllTests() {
+        terminal.innerHTML = ""; codeContainer.style.display = "none";
+        runAllBtn.disabled = true; runAllBtn.innerHTML = "⏳ Paralel Koşuluyor...";
+        startBtn.disabled = true;
+        reportBtn.style.display = "none";
+        statusSpan.style.color = "#facc15"; statusSpan.innerText = "Yürütülüyor...";
+        socket.emit('run_all_tests');
+    }
 </script>
 </body>
 </html>

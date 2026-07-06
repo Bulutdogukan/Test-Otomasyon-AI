@@ -6,7 +6,13 @@ dotenv.config();
 
 export default defineConfig({
   testDir: './tests', //
-  
+
+  // Kalıcı olarak biriken tests/generated/specs klasöründeki tüm testlerin
+  // tek tıkla paralel koşulabilmesi için. PW_WORKERS ile makineye göre
+  // (örn. daha güçlü Mac Mini'de yüksek, gündelik makinede düşük) ayarlanabilir.
+  fullyParallel: true,
+  workers: process.env.PW_WORKERS ? Number(process.env.PW_WORKERS) : undefined,
+
   /* --- EKLENEN KISIM --- */
   timeout: 60000, // Test başına maksimum süre (60 saniye)
   expect: {

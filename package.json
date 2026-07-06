@@ -6,6 +6,7 @@
   "scripts": {
     "start": "node server.js",
     "test": "playwright test",
+    "test:all": "playwright test tests/generated/specs",
     "ai": "node ai-agent2.js"
   },
   "keywords": ["qa", "automation", "playwright", "ai", "bdd"],

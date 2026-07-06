@@ -137,6 +137,60 @@ node ai-agent2.js "Login butonuna tıkla ve kullanıcı girişini doğrula"
 
 ---
 
+## 3. Kalıcı Test Kütüphanesi ve Tek Tık Paralel Koşum
+
+Her üretilen test artık üzerine yazılmaz; `tests/generated/features/` altında BDD/Gherkin
+`.feature` dosyası, `tests/generated/specs/` altında eşleşen Playwright betiği olarak kalıcı biriktirilir.
+
+Biriken tüm testleri paralel çalıştırmak için:
+
+* **UI'dan:** "▶▶ Tüm Testleri Paralel Çalıştır" butonuna tıklayın.
+* **CLI'dan:**
+
+```bash
+npm run test:all
+```
+
+Paralellik derecesi `.env` dosyasındaki `PW_WORKERS` ile ayarlanır (boş bırakılırsa Playwright,
+makinenin CPU sayısına göre otomatik seçer).
+
+---
+
+# 🖥️ Çoklu Makine (Windows + Mac Mini) ile Koordineli Çalışma
+
+Proje, tek makineyle sınırlı değildir; kod ve `tests/generated/` altındaki test kütüphanesi Git
+üzerinden senkronize edilerek iki makine arasında koordineli çalışılabilir.
+
+## Kurulum (ikinci makinede, örn. Mac Mini)
+
+```bash
+git clone <repo-url>
+cd <repo-folder>
+npm install
+npx playwright install --with-deps
+cp .env.example .env   # ardından .env dosyasını doldurun
+```
+
+## Güçlü Makinenin (Mac Mini) Kaynaklarını Ağ Üzerinden Kullanma
+
+Zip ile dosya taşımaya gerek kalmadan, Mac Mini'nin donanımı ağ üzerinden Windows makineden de
+kullanılabilir:
+
+* **Daha güçlü LLM modeli:** Mac Mini'de `OLLAMA_HOST=0.0.0.0 ollama serve` ile Ollama LAN'a açılır
+  ve 64 GB RAM'e uygun daha büyük bir model (örn. `qwen2.5-coder:32b`) çekilir. Windows'taki `.env`
+  dosyasında `OLLAMA_URL=http://<mac-mini-ip>:11434/api/chat` ayarlanarak üretim sırasında Mac
+  Mini'nin modeli kullanılır.
+* **Uzak tarayıcı (Grid):** Mac Mini'de `npx playwright run-server --port 4444` çalıştırılıp,
+  Windows'ta `.env` dosyasında `GRID_WS_ENDPOINT=ws://<mac-mini-ip>:4444/` ayarlanarak, arayüzdeki
+  "Uzak Sunucuda Çalıştır" seçeneği (veya `--grid` bayrağı) ile keşif Mac Mini üzerinde yürütülür.
+* **Yüksek paralellik:** `npm run test:all` doğrudan Mac Mini'de çalıştırılırken `PW_WORKERS` yüksek
+  tutulabilir (örn. 8-12); Windows'ta düşük tutulması önerilir (örn. 2-4).
+
+Her iki makine de `git push` / `git pull` ile aynı `tests/generated/` kütüphanesini paylaşır — biri
+yeni senaryo üretirken diğeri mevcut kütüphaneyi paralel koşabilir.
+
+---
+
 # 🧠 Sistem Mimarisi
 
 Bu yapı aşağıdaki temel bileşenlerden oluşur:
@@ -159,20 +213,26 @@ Bu yapı aşağıdaki temel bileşenlerden oluşur:
 ├── public/
 │   └── index.html
 ├── tests/
+│   └── generated/
+│       ├── features/   # Kalıcı .feature dosyaları
+│       └── specs/      # Kalıcı, derlenmiş .spec.ts dosyaları
 ├── reports/
-└── .env
+├── .env
+└── .env.example
 ```
 
 ## Dosya Açıklamaları
 
-| Dosya                  | Açıklama                               |
-| ---------------------- | -------------------------------------- |
-| `server.js`            | Express & Socket.io tabanlı ana sunucu |
-| `ai-agent2.js`         | Yapay zeka destekli otomasyon ajanı    |
-| `playwright.config.ts` | Playwright yapılandırmaları            |
-| `public/index.html`    | Kullanıcı arayüzü                      |
-| `tests/`               | Oluşturulan test senaryoları           |
-| `reports/`             | Allure rapor çıktıları                 |
+| Dosya                          | Açıklama                                    |
+| ------------------------------ | -------------------------------------------- |
+| `server.js`                    | Express & Socket.io tabanlı ana sunucu       |
+| `ai-agent2.js`                 | Yapay zeka destekli otomasyon ajanı          |
+| `playwright.config.ts`         | Playwright yapılandırmaları                  |
+| `public/index.html`            | Kullanıcı arayüzü                            |
+| `tests/generated/features/`    | Kalıcı BDD/Gherkin senaryo kütüphanesi       |
+| `tests/generated/specs/`       | Kalıcı, koşulabilir Playwright betikleri     |
+| `reports/`                     | Allure rapor çıktıları                       |
+| `.env.example`                 | Ortam değişkeni şablonu (çoklu makine kurulumu için) |
 
 ---
 
@@ -203,6 +263,4 @@ Bu yapı aşağıdaki temel bileşenlerden oluşur:
 * Çoklu LLM desteği
 * Selenium fallback sistemi
 * Docker & Kubernetes deployment
-* Self-healing locator sistemi
-* Paralel test orkestrasyonu
 * AI destekli hata analizi

@@ -4,6 +4,7 @@ const { Server } = require('socket.io');
 const path = require('path');
 const fs = require('fs');
 const multer = require('multer');
+const { spawn } = require('child_process');
 
 // YENİ MİMARİ BAĞLANTISI (Child Process yerine direkt modül çağrısı)
 require('dotenv').config();
@@ -29,6 +30,9 @@ process.on('uncaughtException', (err) => {
 // (ai_generated.spec.ts) ve global process.env'e yazdığından, paralel akışlar
 // birbirinin durumunu/çıktısını bozardı. Aynı anda tek akışa izin veriyoruz.
 let isFlowRunning = false;
+// Toplu (paralel) koşum için ayrı kilit — AI üretim akışıyla (isFlowRunning) aynı anda
+// çalışırsa dosya/rapor klasörleri çakışabilir, bu yüzden ikisi karşılıklı birbirini engeller.
+let isBatchRunning = false;
 
 const app = express();
 const server = http.createServer(app);
@@ -69,7 +73,7 @@ io.on('connection', (socket) => {
     socket.on('start_test', async (data) => {
         // ⚠️ DÜZELTME: Bir akış çalışırken gelen ikinci istek, stdout hook'u kurulmadan
         // ÖNCE reddedilir (aksi halde hook'lar çakışır, dosyalar ezişir).
-        if (isFlowRunning) {
+        if (isFlowRunning || isBatchRunning) {
             socket.emit('log', `\n⛔ Şu anda başka bir test akışı çalışıyor. Lütfen tamamlanmasını bekleyip tekrar deneyin.\n`);
             socket.emit('test_finished');
             return;
@@ -107,20 +111,17 @@ io.on('connection', (socket) => {
 
         try {
             // YENİ MİMARİ: Orchestrator'ı doğrudan çağırıyoruz (Child Process hantallığı bitti)
-            const exitCode = await executeAutonomousFlow(url, prompt, useGrid);
-            
+            const { exitCode, featurePath, specPath } = await executeAutonomousFlow(url, prompt, useGrid);
+
             socket.emit('log', `\n✅ Test Döngüsü Tamamlandı. (Çıkış Kodu: ${exitCode})\n`);
-            
-            const testFilePath = path.join(__dirname, 'tests', 'ai_generated.spec.ts');
-            const featureFilePath = path.join(__dirname, 'tests', 'ai_generated.feature');
-            
+
             let tsCode = "// TS Kodu bulunamadı";
             let featureCode = "// Feature dosyası bulunamadı";
 
-            if (fs.existsSync(testFilePath)) tsCode = fs.readFileSync(testFilePath, 'utf-8');
-            if (fs.existsSync(featureFilePath)) featureCode = fs.readFileSync(featureFilePath, 'utf-8');
+            if (fs.existsSync(specPath)) tsCode = fs.readFileSync(specPath, 'utf-8');
+            if (fs.existsSync(featurePath)) featureCode = fs.readFileSync(featurePath, 'utf-8');
 
-            socket.emit('test_code', { ts: tsCode, feature: featureCode }); 
+            socket.emit('test_code', { ts: tsCode, feature: featureCode });
             socket.emit('test_finished');
 
         } catch (error) {
@@ -131,6 +132,71 @@ io.on('connection', (socket) => {
             process.stdout.write = originalStdoutWrite;
             isFlowRunning = false;
         }
+    });
+
+    socket.on('run_all_tests', () => {
+        if (isFlowRunning || isBatchRunning) {
+            socket.emit('log', `\n⛔ Şu anda başka bir test akışı çalışıyor. Lütfen tamamlanmasını bekleyip tekrar deneyin.\n`);
+            socket.emit('all_tests_finished');
+            return;
+        }
+
+        const specsDir = path.join(__dirname, 'tests', 'generated', 'specs');
+        if (!fs.existsSync(specsDir) || fs.readdirSync(specsDir).length === 0) {
+            socket.emit('log', `\n⚠️ Henüz koşulacak üretilmiş test bulunamadı. Önce en az bir test üretin.\n`);
+            socket.emit('all_tests_finished');
+            return;
+        }
+
+        isBatchRunning = true;
+        socket.emit('log', `\n==================================================\n`);
+        socket.emit('log', `🚀 TÜM TESTLER PARALEL ÇALIŞTIRILIYOR\n📂 Klasör: tests/generated/specs\n`);
+        socket.emit('log', `==================================================\n`);
+
+        // Önceki (tekil veya toplu) koşumdan kalan rapor klasörleri temizlenir; aksi halde
+        // Allure raporu eski ve yeni sonuçları karıştırır.
+        ['allure-results', 'allure-report', 'playwright-report', 'test-results'].forEach(dir => {
+            const dirPath = path.join(__dirname, dir);
+            if (fs.existsSync(dirPath)) fs.rmSync(dirPath, { recursive: true, force: true });
+        });
+
+        const envVars = { ...process.env, FORCE_COLOR: '1' };
+        const npxCmd = process.platform === 'win32' ? 'npx.cmd' : 'npx';
+
+        const testProcess = spawn(npxCmd, ['playwright', 'test', 'tests/generated/specs', '--reporter=list,allure-playwright'], {
+            env: envVars, shell: true
+        });
+
+        testProcess.on('error', (err) => {
+            socket.emit('log', `\n❌ Playwright süreci başlatılamadı: ${err.message}\n`);
+            socket.emit('all_tests_finished');
+            isBatchRunning = false;
+        });
+
+        testProcess.stdout.on('data', (data) => socket.emit('log', data.toString()));
+        testProcess.stderr.on('data', (data) => socket.emit('log', data.toString()));
+
+        testProcess.on('close', (code) => {
+            socket.emit('log', `\n✅ Paralel Koşum Tamamlandı. (Çıkış Kodu: ${code})\n📊 Allure raporu derleniyor...\n`);
+
+            const allureProcess = spawn(npxCmd, ['allure', 'generate', './allure-results', '-o', './allure-report', '--clean'], { shell: true });
+
+            allureProcess.on('error', (err) => {
+                socket.emit('log', `\n⚠️ Allure raporu üretilemedi (rapor atlanıyor): ${err.message}\n`);
+                socket.emit('all_tests_finished');
+                isBatchRunning = false;
+            });
+
+            allureProcess.on('close', (allureCode) => {
+                if (allureCode === 0) {
+                    socket.emit('log', `\n✅ Rapor hazırlandı.\n`);
+                } else {
+                    socket.emit('log', `\n⚠️ Allure ${allureCode} koduyla bitti; rapor eksik olabilir.\n`);
+                }
+                socket.emit('all_tests_finished');
+                isBatchRunning = false;
+            });
+        });
     });
 
     socket.on('open_report', () => {

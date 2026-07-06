@@ -11,5 +11,9 @@ test-results/
 # AI tarafından üretilen betik (her koşuda yeniden yazılır)
 tests/ai_generated.spec.ts
 
+# NOT: tests/generated/features/*.feature VE tests/generated/specs/*.spec.ts kasıtlı olarak
+# git'e dahil edilir. .spec.ts, canlı DOM keşfinden derlendiği için .feature'dan tek başına
+# yeniden üretilemez — iki makine arasında aynı test setini koşabilmek için ikisi de commit edilir.
+
 # Yüklenen geçici senaryo dosyaları
 uploads/

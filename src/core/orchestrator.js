@@ -21,8 +21,26 @@ function escapeRegExp(s) {
 const PROJECT_ROOT = path.join(__dirname, '../../');
 const TESTS_DIR = path.join(PROJECT_ROOT, 'tests');
 
-const TEST_FILE = path.join(TESTS_DIR, 'ai_generated.spec.ts');
-const FEATURE_FILE = path.join(TESTS_DIR, 'ai_generated.feature');
+// Üretilen her senaryo kalıcı olarak burada birikir (bir öncekinin üzerine yazılmaz).
+const GENERATED_FEATURES_DIR = path.join(TESTS_DIR, 'generated', 'features');
+const GENERATED_SPECS_DIR = path.join(TESTS_DIR, 'generated', 'specs');
+[GENERATED_FEATURES_DIR, GENERATED_SPECS_DIR].forEach(dir => {
+    if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+});
+
+// Senaryo başlığından + zaman damgasından benzersiz, okunabilir bir dosya adı üretir.
+function slugify(text) {
+    const base = String(text || 'senaryo')
+        .split('\n')[0]
+        .toLowerCase()
+        .replace(/ı/g, 'i').replace(/ş/g, 's').replace(/ğ/g, 'g')
+        .replace(/ü/g, 'u').replace(/ö/g, 'o').replace(/ç/g, 'c')
+        .replace(/[^a-z0-9]+/g, '-')
+        .replace(/^-+|-+$/g, '')
+        .slice(0, 60) || 'senaryo';
+    const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+    return `${timestamp}_${base}`;
+}
 
 function cleanPreviousState() {
     const dirsToClean = ['allure-results', 'allure-report', 'playwright-report', 'test-results'];
@@ -30,8 +48,6 @@ function cleanPreviousState() {
         const dirPath = path.join(PROJECT_ROOT, dir);
         if (fs.existsSync(dirPath)) fs.rmSync(dirPath, { recursive: true, force: true });
     });
-    if (fs.existsSync(FEATURE_FILE)) fs.unlinkSync(FEATURE_FILE);
-    if (fs.existsSync(TEST_FILE)) fs.unlinkSync(TEST_FILE);
 }
 
 // Canlı sayfadan DOM çıkartan sistem fonksiyonu
@@ -108,7 +124,10 @@ async function executeAutonomousFlow(url, userPrompt, useGrid = false) {
         
         // 1. Planlama
         const testPlan = await agentPlanTest(userPrompt, OLLAMA_MODEL, OLLAMA_URL);
-        fs.writeFileSync(FEATURE_FILE, testPlan);
+        const slug = slugify(testPlan);
+        const featurePath = path.join(GENERATED_FEATURES_DIR, `${slug}.feature`);
+        const specPath = path.join(GENERATED_SPECS_DIR, `${slug}.spec.ts`);
+        fs.writeFileSync(featurePath, testPlan);
 
         // 2. KEŞİF (EXPLORATION) AŞAMASI
         let browser;
@@ -302,15 +321,16 @@ async function executeAutonomousFlow(url, userPrompt, useGrid = false) {
 
         // 3. DERLEME (COMPILATION) AŞAMASI
         logInfo('🧹', 'Keşif tamamlandı. Hızlı ve Kalıcı Test Senaryosu derleniyor...');
-        compilePlaywrightCode(stepHistory, url, testPlan, TEST_FILE);
+        compilePlaywrightCode(stepHistory, url, testPlan, specPath);
 
         // 4. TEST KOŞUSU VE RAPORLAMA
         logInfo('⚙️', `Playwright Statik Test Runner Başlatılıyor...`);
+        const relativeSpecPath = path.relative(PROJECT_ROOT, specPath).split(path.sep).join('/');
         return new Promise((resolve, reject) => {
             const envVars = { ...process.env, FORCE_COLOR: "1" };
             const npxCmd = process.platform === 'win32' ? 'npx.cmd' : 'npx';
-            
-            const testProcess = spawn(npxCmd, ['playwright', 'test', 'tests/ai_generated.spec.ts', '--reporter=list,allure-playwright', '--workers=1'], {
+
+            const testProcess = spawn(npxCmd, ['playwright', 'test', relativeSpecPath, '--reporter=list,allure-playwright', '--workers=1'], {
                 env: envVars, shell: true
             });
 
@@ -332,7 +352,7 @@ async function executeAutonomousFlow(url, userPrompt, useGrid = false) {
                 // raporlama hatasıyla maskelenmemeli, test exit kodu yine de döndürülür.
                 allureProcess.on('error', (err) => {
                     logWarning(`Allure raporu üretilemedi (rapor atlanıyor): ${err.message}`);
-                    resolve(code);
+                    resolve({ exitCode: code, featurePath, specPath });
                 });
 
                 allureProcess.on('close', (allureCode) => {
@@ -341,7 +361,7 @@ async function executeAutonomousFlow(url, userPrompt, useGrid = false) {
                     } else {
                         logWarning(`Allure ${allureCode} koduyla bitti; rapor eksik olabilir ama akış tamamlandı.`);
                     }
-                    resolve(code);
+                    resolve({ exitCode: code, featurePath, specPath });
                 });
             });
         });

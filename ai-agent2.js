@@ -21,8 +21,8 @@ if (useGrid && process.env.GRID_WS_ENDPOINT) {
 }
 
 executeAutonomousFlow(url, prompt, useGrid)
-  .then((exitCode) => {
-    process.exit(exitCode);
+  .then((result) => {
+    process.exit(result.exitCode);
   })
   .catch((err) => {
     console.error(err);

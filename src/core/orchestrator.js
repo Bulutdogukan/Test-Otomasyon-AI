@@ -64,6 +64,7 @@ async function scanLivePage(page) {
                 else if (title) locator = `[title="${title}"]`;
                 else if (tag === 'a' && href) locator = `a[href="${href}"]`;
                 else if (text) locator = `text="${text}"`;
+                else if (alt) locator = `[alt="${alt}"]`;
                 else locator = `:nth-match(${tag}, ${index + 1})`;
 
                 let label = '';
@@ -144,6 +145,8 @@ async function executeAutonomousFlow(url, userPrompt, useGrid = false) {
         let isDone = false;
         let loopCount = 0;
         const maxLoops = 15;
+        let lastActionKey = null;
+        let repeatCount = 0;
 
         while (!isDone && loopCount < maxLoops) {
             logInfo('🔍', `[Adım ${loopCount + 1}] Canlı Ekran DOM Haritası Çıkarılıyor...`);
@@ -171,6 +174,20 @@ async function executeAutonomousFlow(url, userPrompt, useGrid = false) {
             // FAZ 3.2: dragAndDrop hedef locator'ı da label->CSS çevrilir.
             let safeTarget = nextStep.target ? (domMap[nextStep.target] || nextStep.target) : undefined;
             logInfo('🎯', `Eylem Uygulanıyor: [${nextStep.action.toUpperCase()}] -> ${safeLocator}`);
+
+            // İlerleme kontrolü: aynı (aksiyon+locator) art arda tekrar ediyorsa
+            // sayfa hiç değişmiyor demektir — 15 adım boyunca beklemeden hemen dur.
+            const actionKey = `${nextStep.action}:${safeLocator}`;
+            if (actionKey === lastActionKey) {
+                repeatCount++;
+                if (repeatCount >= 2) {
+                    logError(`Aynı eylem (${actionKey}) art arda ilerleme sağlamadan tekrarlandı. Keşif durduruluyor.`);
+                    break;
+                }
+            } else {
+                repeatCount = 0;
+                lastActionKey = actionKey;
+            }
 
             // ⚡ FAZ 2: ASSERTION (Doğrulama) — locator hatasından farklı ele alınır.
             // Canlı doğrulanır; sonuç ne olursa olsun teste kaydedilir (gerçek bir hata ise
@@ -216,6 +233,7 @@ async function executeAutonomousFlow(url, userPrompt, useGrid = false) {
                 logInfo('🩹', `Self-Healing devrede...`);
 
                 let healed = false;
+                const triedLocators = new Set([safeLocator]);
                 for (let healAttempt = 1; healAttempt <= MAX_HEAL_ATTEMPTS && !healed; healAttempt++) {
                     try {
                         const freshMap = await scanLivePage(activePage);
@@ -234,6 +252,13 @@ async function executeAutonomousFlow(url, userPrompt, useGrid = false) {
                         }
 
                         const healedLocator = freshMap[healedStep.locator] ? freshMap[healedStep.locator] : healedStep.locator;
+
+                        // Aynı kırık locator tekrar önerildiyse denemeden geç (döngüde takılmayı önler).
+                        if (triedLocators.has(healedLocator)) {
+                            logWarning(`Self-Healing: aynı locator (${healedLocator}) tekrar önerildi, atlanıyor.`);
+                            continue;
+                        }
+                        triedLocators.add(healedLocator);
                         const healedValue = healedStep.value != null ? healedStep.value : resolvedValue;
                         const healedTarget = (healedStep.target != null) ? (freshMap[healedStep.target] || healedStep.target) : safeTarget;
                         logInfo('🩹', `Self-Healing denemesi ${healAttempt}: yeni locator -> ${healedLocator}`);

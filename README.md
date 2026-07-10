@@ -28,6 +28,16 @@ Her test çalıştırmasının ardından otomatik olarak detaylı **Allure Repor
 
 Google Ads, üçüncü parti iframe’ler ve pop-up içerikleri otomatik olarak engellenerek test stabilitesi artırılır.
 
+## 📁 Kullanıcıya Özel Test Klasörü
+
+Her kullanıcı, üretilen testlerin kaydedileceği klasörü arayüzden kendisi seçer ("Klasör Seç" ile native diyalog — Windows ve macOS). Seçim tarayıcıda saklanır; farklı kullanıcıların testleri birbirine karışmaz. Elinizdeki hazır bir test klasörünü seçip içindeki **tüm testleri tek tıkla paralel** koşabilirsiniz (alt klasörler dahil). Koşum öncesi spec'ler proje içindeki `.batch-staging/` klasörüne kopyalanır; böylece modül çözümlemesi her zaman projenin `node_modules`'üne gider.
+
+## 🧠 Arayüzden Model Seçimi
+
+Ollama'da kurulu modeller arayüzdeki açılır listeden seçilebilir; daha güçlü bir donanımda daha büyük bir modelle çalışmak için `.env` düzenlemek gerekmez.
+
+> **Grid notu:** `chromium.connect` **Playwright protokolü** ister. Vanilla Selenium Grid 4 `/playwright/...` endpoint'i sunmaz; merkezi makinede **Aerokube Moon** ya da `npx playwright run-server --port 4444 --path /playwright/chromium` kullanın ve `.env`'deki `GRID_WS_ENDPOINT` adresini buna göre ayarlayın.
+
 ---
 
 # 📋 Gereksinimler
@@ -48,6 +58,8 @@ ollama run qwen2.5-coder:7b
 ---
 
 # 🛠️ Kurulum
+
+**Windows:** `Vakifbank_QA_Baslat.bat` · **macOS (Mac mini):** `MacMini_QA_Baslat.command` (ilk seferde `chmod +x MacMini_QA_Baslat.command`; betik bağımlılıkları otomatik kurar)
 
 ## 1. Repository'yi Klonlayın
 

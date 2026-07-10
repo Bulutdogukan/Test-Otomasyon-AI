@@ -17,3 +17,9 @@ tests/ai_generated.spec.ts
 
 # Yüklenen geçici senaryo dosyaları
 uploads/
+
+# Koşum öncesi spec'lerin kopyalandığı geçici hazırlık klasörü
+.batch-staging/
+
+# Claude Code yerel araç ayarları (makineye özel)
+.claude/

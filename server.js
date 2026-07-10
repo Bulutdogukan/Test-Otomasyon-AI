@@ -16,6 +16,7 @@ if (!process.env.OLLAMA_URL || !process.env.OLLAMA_MODEL) {
 }
 
 const { executeAutonomousFlow } = require('./src/core/orchestrator');
+const { stageSpecTree } = require('./src/utils/staging');
 
 // ⚠️ DÜZELTME: Süreç seviyesinde güvenlik ağı. İşlenmemiş promise reddi veya
 // yakalanmamış istisna artık sunucuyu sessizce kilitlemez/çökertmez; loglanır.
@@ -54,6 +55,58 @@ app.use(express.json());
 // Console logları arayüze basmak için process.stdout'u hookluyoruz (Geçici yönlendirme)
 const originalStdoutWrite = process.stdout.write.bind(process.stdout);
 
+// 🔒 İstemciden gelen klasör yolu doğrulanmadan kullanılmaz.
+// Boş/undefined -> null (varsayılan klasör). Geçersizse Error fırlatır.
+function sanitizeFolderPath(raw) {
+    if (raw == null) return null;
+    let clean = String(raw).trim().replace(/^"(.*)"$/, '$1').trim(); // yapıştırılan tırnakları soy
+    if (!clean) return null;
+    // Windows dosya yollarında zaten geçersiz olan karakterler + satır sonları reddedilir.
+    if (/["\r\n<>|*?]/.test(clean)) throw new Error('Klasör yolu geçersiz karakter içeriyor.');
+    clean = path.normalize(clean);
+    if (!path.isAbsolute(clean)) throw new Error('Klasör yolu tam (absolute) olmalı. Örnek: C:\\QA-Testlerim\\Kampanya');
+    return clean;
+}
+
+// Gerçek "Klasör Seç" diyaloğu: sunucu kullanıcının kendi makinesinde çalıştığı
+// için diyalog doğru ekranda belirir. Windows: PowerShell betiği, macOS (Mac mini): osascript.
+// NOT: Native klasör diyaloğu arka plan sürecinden açıldığında varsayılan olarak
+// tarayıcının ARKASINDA kalır -> kullanıcı "çalışmıyor" sanır. Windows betiği
+// (scripts/pick-folder.ps1) diyaloğu bulup HWND_TOPMOST ile öne çeker.
+const FOLDER_DIALOG_PS1 = path.join(__dirname, 'scripts', 'pick-folder.ps1');
+// macOS: standart Standard Additions komutu; seçilen klasörün POSIX yolunu döner.
+// İptalde osascript hata koduyla çıkar (stdout boş -> sunucu cancelled emit eder).
+const FOLDER_DIALOG_OSA = 'POSIX path of (choose folder with prompt "Testlerin kaydedilecegi / kosulacagi klasoru secin")';
+let isPickingFolder = false;
+
+function spawnFolderDialog() {
+    if (process.platform === 'win32') {
+        return spawn('powershell', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-STA', '-File', FOLDER_DIALOG_PS1]);
+    }
+    if (process.platform === 'darwin') {
+        return spawn('osascript', ['-e', FOLDER_DIALOG_OSA]);
+    }
+    return null;
+}
+
+// Ollama'daki kurulu modelleri listelemek için /api/chat -> /api/tags türetilir.
+function deriveOllamaTagsUrl() {
+    try {
+        const u = new URL(process.env.OLLAMA_URL);
+        return `${u.origin}/api/tags`;
+    } catch {
+        return null;
+    }
+}
+
+// Model adı yalnızca Ollama JSON gövdesine gider ama yine de sıkı doğrulanır.
+function sanitizeModelName(raw) {
+    if (raw == null || !String(raw).trim()) return null; // boş -> .env varsayılanı
+    const clean = String(raw).trim();
+    if (!/^[A-Za-z0-9._:\/-]{1,100}$/.test(clean)) throw new Error('Geçersiz model adı.');
+    return clean;
+}
+
 app.post('/upload', (req, res) => {
     // multer'ı manuel çağırıp boyut/tip hatalarını 400 ile düzgün döndürüyoruz (aksi halde 500).
     upload.single('scenarioFile')(req, res, (uploadErr) => {
@@ -70,6 +123,45 @@ app.post('/upload', (req, res) => {
 });
 
 io.on('connection', (socket) => {
+    // 📁 Native klasör seçme diyaloğu (Windows: PowerShell, macOS: osascript).
+    socket.on('select_folder', () => {
+        if (isPickingFolder) return; // zaten açık bir diyalog var
+        const dialog = spawnFolderDialog();
+        if (!dialog) {
+            socket.emit('folder_selected', { error: 'Klasör seçme diyaloğu bu işletim sisteminde desteklenmiyor. Yolu elle yazabilirsiniz.' });
+            return;
+        }
+        isPickingFolder = true;
+
+        let out = '';
+        dialog.stdout.on('data', d => out += d.toString());
+        dialog.on('error', (err) => {
+            isPickingFolder = false;
+            socket.emit('folder_selected', { error: 'Diyalog açılamadı: ' + err.message });
+        });
+        dialog.on('close', () => {
+            isPickingFolder = false;
+            // macOS osascript sondaki / ve satır sonunu bırakır; ikisi de temizlenir.
+            const selected = out.trim().replace(/\/$/, '');
+            if (selected) socket.emit('folder_selected', { path: selected });
+            else socket.emit('folder_selected', { cancelled: true });
+        });
+    });
+
+    // 🧠 Kurulu Ollama modellerini UI'a bildirir (model seçici dropdown için).
+    socket.on('get_models', async () => {
+        const tagsUrl = deriveOllamaTagsUrl();
+        try {
+            if (!tagsUrl) throw new Error('OLLAMA_URL çözümlenemedi');
+            const res = await fetch(tagsUrl, { signal: AbortSignal.timeout(5000) });
+            const data = await res.json();
+            const models = (data.models || []).map(m => m.name);
+            socket.emit('models_list', { models, current: process.env.OLLAMA_MODEL });
+        } catch (e) {
+            socket.emit('models_list', { models: [], current: process.env.OLLAMA_MODEL, error: 'Model listesi alınamadı: ' + e.message });
+        }
+    });
+
     socket.on('start_test', async (data) => {
         // ⚠️ DÜZELTME: Bir akış çalışırken gelen ikinci istek, stdout hook'u kurulmadan
         // ÖNCE reddedilir (aksi halde hook'lar çakışır, dosyalar ezişir).
@@ -78,9 +170,22 @@ io.on('connection', (socket) => {
             socket.emit('test_finished');
             return;
         }
-        isFlowRunning = true;
 
-        const { url, prompt, video, screenshot, useGrid } = data;
+        const { url, prompt, video, screenshot, useGrid, outputDir, model } = data;
+
+        // 📁 Kayıt klasörü + 🧠 model seçimi doğrulanır (boşsa varsayılanlar kullanılır).
+        let targetDir = null;
+        let selectedModel = null;
+        try {
+            targetDir = sanitizeFolderPath(outputDir);
+            if (targetDir && !fs.existsSync(targetDir)) fs.mkdirSync(targetDir, { recursive: true });
+            selectedModel = sanitizeModelName(model);
+        } catch (e) {
+            socket.emit('log', `\n❌ Girdi hatası: ${e.message}\n`);
+            socket.emit('test_finished');
+            return;
+        }
+        isFlowRunning = true;
 
         // BÜTÜNLEŞTİRİCİ GRID ATAMASI: Hem DOM (orchestrator) hem Playwright (compiler) için
         if (useGrid && process.env.GRID_WS_ENDPOINT) {
@@ -93,7 +198,9 @@ io.on('connection', (socket) => {
         }
         
         socket.emit('log', `🚀 YENİ TEST BAŞLATILDI\n🌐 Hedef: ${url}`);
-        socket.emit('log', `🖥️ Ortam: ${useGrid ? '☁️ Uzak Sunucu (Selenium Grid)' : '💻 Lokal Makine'}\n`);
+        socket.emit('log', `🖥️ Ortam: ${useGrid ? '☁️ Uzak Sunucu (Selenium Grid)' : '💻 Lokal Makine'}`);
+        socket.emit('log', `📁 Kayıt Klasörü: ${targetDir || 'tests/generated (varsayılan)'}`);
+        socket.emit('log', `🧠 Model: ${selectedModel || process.env.OLLAMA_MODEL + ' (varsayılan)'}\n`);
         
         // Node terminaline yazılan her şeyi arayüze (Socket) basan hook
         process.stdout.write = (chunk, encoding, callback) => {
@@ -111,7 +218,7 @@ io.on('connection', (socket) => {
 
         try {
             // YENİ MİMARİ: Orchestrator'ı doğrudan çağırıyoruz (Child Process hantallığı bitti)
-            const { exitCode, featurePath, specPath } = await executeAutonomousFlow(url, prompt, useGrid);
+            const { exitCode, featurePath, specPath } = await executeAutonomousFlow(url, prompt, useGrid, targetDir, selectedModel);
 
             socket.emit('log', `\n✅ Test Döngüsü Tamamlandı. (Çıkış Kodu: ${exitCode})\n`);
 
@@ -134,23 +241,54 @@ io.on('connection', (socket) => {
         }
     });
 
-    socket.on('run_all_tests', () => {
+    socket.on('run_all_tests', (data = {}) => {
         if (isFlowRunning || isBatchRunning) {
             socket.emit('log', `\n⛔ Şu anda başka bir test akışı çalışıyor. Lütfen tamamlanmasını bekleyip tekrar deneyin.\n`);
             socket.emit('all_tests_finished');
             return;
         }
 
-        const specsDir = path.join(__dirname, 'tests', 'generated', 'specs');
-        if (!fs.existsSync(specsDir) || fs.readdirSync(specsDir).length === 0) {
-            socket.emit('log', `\n⚠️ Henüz koşulacak üretilmiş test bulunamadı. Önce en az bir test üretin.\n`);
+        // 📁 Kullanıcının seçtiği klasör koşulur; boşsa varsayılan tests/generated.
+        // Kullanıcı elindeki hazır bir test klasörünü de seçip toplu koşabilir.
+        let batchDir;
+        try {
+            batchDir = sanitizeFolderPath(data.folder) || path.join(__dirname, 'tests', 'generated');
+        } catch (e) {
+            socket.emit('log', `\n❌ Klasör hatası: ${e.message}\n`);
             socket.emit('all_tests_finished');
             return;
         }
 
+        if (!fs.existsSync(batchDir)) {
+            socket.emit('log', `\n⚠️ Klasör bulunamadı: ${batchDir}\n`);
+            socket.emit('all_tests_finished');
+            return;
+        }
+
+        // Spec'ler proje içi hazırlık klasörüne kopyalanır (bkz. src/utils/staging.js:
+        // harici klasörlerde modül çözümlemesi yanlış node_modules'e gidebilir).
+        let staged;
+        try {
+            staged = stageSpecTree(batchDir);
+        } catch (e) {
+            socket.emit('log', `\n❌ Testler hazırlanamadı: ${e.message}\n`);
+            socket.emit('all_tests_finished');
+            return;
+        }
+        if (staged.count === 0) {
+            socket.emit('log', `\n⚠️ Bu klasörde koşulabilir test (.spec.ts / .test.ts) bulunamadı: ${batchDir}\n`);
+            socket.emit('all_tests_finished');
+            return;
+        }
+
+        // ☁️ Grid seçimi: toplu koşum da tekil akış gibi Grid'i destekler. Yapışkan
+        // global env yerine çocuk sürece ÖZEL env kurulur (önceki akıştan kalan
+        // PW_WS_ENDPOINT değeri toplu koşumu asla etkilemez).
+        const useGrid = !!data.useGrid && !!process.env.GRID_WS_ENDPOINT;
+
         isBatchRunning = true;
         socket.emit('log', `\n==================================================\n`);
-        socket.emit('log', `🚀 TÜM TESTLER PARALEL ÇALIŞTIRILIYOR\n📂 Klasör: tests/generated/specs\n`);
+        socket.emit('log', `🚀 KLASÖRDEKİ TÜM TESTLER PARALEL ÇALIŞTIRILIYOR\n📂 Klasör: ${batchDir}\n🧪 Bulunan test dosyası: ${staged.count}\n🖥️ Ortam: ${useGrid ? '☁️ Uzak Sunucu (Selenium Grid)' : '💻 Lokal Makine'}\n`);
         socket.emit('log', `==================================================\n`);
 
         // Önceki (tekil veya toplu) koşumdan kalan rapor klasörleri temizlenir; aksi halde
@@ -160,11 +298,15 @@ io.on('connection', (socket) => {
             if (fs.existsSync(dirPath)) fs.rmSync(dirPath, { recursive: true, force: true });
         });
 
-        const envVars = { ...process.env, FORCE_COLOR: '1' };
+        // Hazırlık klasörü PW_TEST_DIR env'i ile config'e iletilir; klasör yolu
+        // CLI argümanına hiç girmez (boşluklu yol/kaçışlama derdi yok).
+        const envVars = { ...process.env, FORCE_COLOR: '1', PW_TEST_DIR: staged.stagingDir };
+        if (useGrid) envVars.PW_WS_ENDPOINT = process.env.GRID_WS_ENDPOINT;
+        else delete envVars.PW_WS_ENDPOINT; // önceki tekil akıştan kalan değer temizlenir
         const npxCmd = process.platform === 'win32' ? 'npx.cmd' : 'npx';
 
-        const testProcess = spawn(npxCmd, ['playwright', 'test', 'tests/generated/specs', '--reporter=list,allure-playwright'], {
-            env: envVars, shell: true
+        const testProcess = spawn(npxCmd, ['playwright', 'test', '--reporter=list,allure-playwright'], {
+            env: envVars, shell: true, cwd: __dirname
         });
 
         testProcess.on('error', (err) => {
@@ -205,7 +347,7 @@ io.on('connection', (socket) => {
     });
 });
 
-const PORT = 3000;
+const PORT = process.env.PORT || 3000;
 server.listen(PORT, () => {
     console.log(`\n===========================================`);
     console.log(`🌐 QA MANAGEMENT SERVER AKTİF - PORT: ${PORT}`);

@@ -6,6 +6,7 @@ const { logInfo, logSuccess, logError, logWarning } = require('../utils/logger')
 const { agentPlanTest, agentGetNextStep, agentHealStep } = require('../services/ai.service');
 const { compilePlaywrightCode } = require('../services/compiler.service');
 const { selectRelevantElements } = require('../services/dom.ranker');
+const { stageSpecFile } = require('../utils/staging');
 
 const OLLAMA_MODEL = process.env.OLLAMA_MODEL || "qwen2.5-coder:7b";
 const OLLAMA_URL = process.env.OLLAMA_URL || "http://127.0.0.1:11434/api/chat";
@@ -21,12 +22,20 @@ function escapeRegExp(s) {
 const PROJECT_ROOT = path.join(__dirname, '../../');
 const TESTS_DIR = path.join(PROJECT_ROOT, 'tests');
 
-// Üretilen her senaryo kalıcı olarak burada birikir (bir öncekinin üzerine yazılmaz).
-const GENERATED_FEATURES_DIR = path.join(TESTS_DIR, 'generated', 'features');
-const GENERATED_SPECS_DIR = path.join(TESTS_DIR, 'generated', 'specs');
-[GENERATED_FEATURES_DIR, GENERATED_SPECS_DIR].forEach(dir => {
-    if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
-});
+// Kullanıcı klasör seçmediyse üretilen senaryolar varsayılan olarak burada birikir.
+// Kullanıcı UI'dan kendi klasörünü seçtiyse (çok kullanıcılı izolasyon) o klasör kullanılır;
+// her iki durumda da <kök>/features ve <kök>/specs alt yapısı kurulur.
+const DEFAULT_GENERATED_DIR = path.join(TESTS_DIR, 'generated');
+
+function resolveOutputDirs(outputDir) {
+    const baseDir = outputDir || DEFAULT_GENERATED_DIR;
+    const featuresDir = path.join(baseDir, 'features');
+    const specsDir = path.join(baseDir, 'specs');
+    [featuresDir, specsDir].forEach(dir => {
+        if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+    });
+    return { baseDir, featuresDir, specsDir };
+}
 
 // Senaryo başlığından + zaman damgasından benzersiz, okunabilir bir dosya adı üretir.
 function slugify(text) {
@@ -117,16 +126,22 @@ async function executeAction(page, action, locator, value, opts = {}) {
     }
 }
 
-async function executeAutonomousFlow(url, userPrompt, useGrid = false) {
+async function executeAutonomousFlow(url, userPrompt, useGrid = false, outputDir = null, modelOverride = null) {
     try {
         if (!url.startsWith('http://') && !url.startsWith('https://')) url = 'https://' + url;
         cleanPreviousState();
-        
+
+        // Kullanıcının seçtiği (veya varsayılan) kayıt klasörü ve AI modeli hazırlanır.
+        const { baseDir, featuresDir, specsDir } = resolveOutputDirs(outputDir);
+        const activeModel = modelOverride || OLLAMA_MODEL;
+        logInfo('📁', `Kayıt Klasörü: ${baseDir}`);
+        logInfo('🧠', `Kullanılan Model: ${activeModel}`);
+
         // 1. Planlama
-        const testPlan = await agentPlanTest(userPrompt, OLLAMA_MODEL, OLLAMA_URL);
+        const testPlan = await agentPlanTest(userPrompt, activeModel, OLLAMA_URL);
         const slug = slugify(testPlan);
-        const featurePath = path.join(GENERATED_FEATURES_DIR, `${slug}.feature`);
-        const specPath = path.join(GENERATED_SPECS_DIR, `${slug}.spec.ts`);
+        const featurePath = path.join(featuresDir, `${slug}.feature`);
+        const specPath = path.join(specsDir, `${slug}.spec.ts`);
         fs.writeFileSync(featurePath, testPlan);
 
         // 2. KEŞİF (EXPLORATION) AŞAMASI
@@ -181,7 +196,7 @@ async function executeAutonomousFlow(url, userPrompt, useGrid = false) {
             const domData = JSON.stringify(rankedMap, null, 2);
 
             logInfo('🧠', `Agent 2 (Locator) hedefe ulaşmak için Düşünüyor...`);
-            const nextStep = await agentGetNextStep(testPlan, domData, stepHistory, OLLAMA_MODEL, OLLAMA_URL);
+            const nextStep = await agentGetNextStep(testPlan, domData, stepHistory, activeModel, OLLAMA_URL);
             
             if (nextStep.action === 'DONE' || nextStep.action === 'done' || nextStep.action === 'BİTTİ') {
                 logSuccess('✅', 'AI: Senaryo hedefine ulaşıldı!');
@@ -199,6 +214,12 @@ async function executeAutonomousFlow(url, userPrompt, useGrid = false) {
             const actionKey = `${nextStep.action}:${safeLocator}`;
             if (actionKey === lastActionKey) {
                 repeatCount++;
+                // Aynı assert'in tekrarı = model DONE diyemiyor ama hedef doğrulandı.
+                // 2. kez YÜRÜTMEDEN başarıyla bitir (gereksiz LLM turu + çift assert önlenir).
+                if (nextStep.action === 'assert') {
+                    logSuccess('✅', 'Doğrulama zaten yapıldı; hedefe ulaşıldı kabul ediliyor (DONE).');
+                    break;
+                }
                 if (repeatCount >= 2) {
                     logError(`Aynı eylem (${actionKey}) art arda ilerleme sağlamadan tekrarlandı. Keşif durduruluyor.`);
                     break;
@@ -262,7 +283,7 @@ async function executeAutonomousFlow(url, userPrompt, useGrid = false) {
                             { action: nextStep.action, locator: safeLocator, value: resolvedValue },
                             reason,
                             JSON.stringify(freshRanked, null, 2),
-                            OLLAMA_MODEL, OLLAMA_URL
+                            activeModel, OLLAMA_URL
                         );
 
                         if (!healedStep || healedStep.action === 'GIVEUP') {
@@ -325,13 +346,18 @@ async function executeAutonomousFlow(url, userPrompt, useGrid = false) {
 
         // 4. TEST KOŞUSU VE RAPORLAMA
         logInfo('⚙️', `Playwright Statik Test Runner Başlatılıyor...`);
-        const relativeSpecPath = path.relative(PROJECT_ROOT, specPath).split(path.sep).join('/');
+        // Seçilen klasör proje DIŞINDA olabilir: spec, proje içindeki hazırlık
+        // klasörüne kopyalanıp oradan koşulur (bkz. src/utils/staging.js — modül
+        // çözümlemesi her zaman projenin node_modules'üne gider). Klasör yolu
+        // PW_TEST_DIR env'i ile config'e iletilir; CLI'ya yol hiç girmez.
+        const stagingDir = stageSpecFile(specPath);
+        const specFileName = path.basename(specPath);
         return new Promise((resolve, reject) => {
-            const envVars = { ...process.env, FORCE_COLOR: "1" };
+            const envVars = { ...process.env, FORCE_COLOR: "1", PW_TEST_DIR: stagingDir };
             const npxCmd = process.platform === 'win32' ? 'npx.cmd' : 'npx';
 
-            const testProcess = spawn(npxCmd, ['playwright', 'test', relativeSpecPath, '--reporter=list,allure-playwright', '--workers=1'], {
-                env: envVars, shell: true
+            const testProcess = spawn(npxCmd, ['playwright', 'test', specFileName, '--reporter=list,allure-playwright', '--workers=1'], {
+                env: envVars, shell: true, cwd: PROJECT_ROOT
             });
 
             // ⚠️ DÜZELTME: spawn 'error' olayı (örn. npx PATH'te yok, izin hatası) artık

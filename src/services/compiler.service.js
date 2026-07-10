@@ -27,7 +27,16 @@ function compilePlaywrightCode(stepHistory, url, testPlan, testFilePath) {
     tsCode += `  test('Keşfedilen ve Doğrulanan Adımlar', async ({ page }) => {\n`;
     tsCode += `    await page.goto(${JSON.stringify(url)});\n\n`;
 
-    stepHistory.forEach((step, index) => {
+    // Ardışık ÖZDEŞ adımlar tekilleştirilir (küçük modeller bazen aynı assert'i
+    // tekrarlar; derlenen teste bir kez yazılması yeterlidir).
+    const dedupedSteps = stepHistory.filter((s, i) => {
+        if (i === 0) return true;
+        const p = stepHistory[i - 1];
+        return !(s.action === p.action && s.locator === p.locator && s.value === p.value &&
+                 s.target === p.target && s.assertType === p.assertType && s.expected === p.expected);
+    });
+
+    dedupedSteps.forEach((step, index) => {
         tsCode += `    // Adım ${index + 1}: [${step.action.toUpperCase()}] İşlemi\n`;
         // ⚠️ DÜZELTME: LLM çıktısı GÜVENİLMEYEN girdidir. Tek tırnak değiştirme yetersizdi
         // (backtick, newline, ') ile betiğe kod enjekte edilebilirdi). JSON.stringify ile

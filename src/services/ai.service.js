@@ -152,6 +152,7 @@ CRITICAL INSTRUCTIONS:
    - "dragAndDrop" -> drag an element onto another; REQUIRES a "target": { "action": "dragAndDrop", "locator": "#item1", "target": "#slot1" }
    - "press" also supports key combinations: { "action": "press", "value": "Control+A" }
 7. ASSERTIONS (VERIFICATION): A test without verification is worthless. Use "assert" to confirm the outcome of your actions. You SHOULD add at least one "assert" before returning DONE.
+   - NEVER repeat an assert that already appears in HISTORY. If the goal is verified by a previous assert, return { "action": "DONE" } immediately.
    - "visible" -> element is present:  { "action": "assert", "locator": "#title", "assertType": "visible" }
    - "text"    -> element contains text: { "action": "assert", "locator": ".header", "assertType": "text", "expected": "Products" }
    - "value"   -> input holds a value:   { "action": "assert", "locator": "#user-name", "assertType": "value", "expected": "standard_user" }

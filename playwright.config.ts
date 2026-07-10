@@ -5,7 +5,10 @@ import * as dotenv from 'dotenv';
 dotenv.config();
 
 export default defineConfig({
-  testDir: './tests', //
+  // Kullanıcı UI'dan kendi test klasörünü seçebilir; sunucu PW_TEST_DIR env'i ile
+  // buraya iletir. Böylece klasör yolu komut satırı argümanına hiç girmez
+  // (boşluklu yol / kaçışlama sorunları oluşmaz). Boşsa proje içi ./tests kullanılır.
+  testDir: process.env.PW_TEST_DIR || './tests',
 
   // Kalıcı olarak biriken tests/generated/specs klasöründeki tüm testlerin
   // tek tıkla paralel koşulabilmesi için. PW_WORKERS ile makineye göre
@@ -24,8 +27,12 @@ export default defineConfig({
     ['html', { open: 'never' }], //
     ['allure-playwright'] //
   ], 
-  use: { 
+  use: {
     baseURL: process.env.BASE_URL,
+    // ☁️ Grid yönlendirmesi config seviyesinde: PW_WS_ENDPOINT ayarlıysa TÜM testler
+    // (elle yazılmış olanlar dahil) uzak tarayıcıdan koşar. AI'ın ürettiği spec'lerdeki
+    // test.use bloğu aynı değeri kullandığından çakışma olmaz.
+    ...(process.env.PW_WS_ENDPOINT ? { connectOptions: { wsEndpoint: process.env.PW_WS_ENDPOINT } } : {}),
     trace: 'retain-on-failure', // Ölçeklenmede 'on' ağır disk/performans yükü yaratır
     // AI-Agent'tan gelen E/H komutlarını doğrudan Playwright'a bağlıyoruz
     video: (process.env.SAVE_VIDEO as any) || 'off',

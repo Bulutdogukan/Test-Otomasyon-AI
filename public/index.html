@@ -19,7 +19,8 @@
         /* Form ve Inputlar */
         .input-group { margin-bottom: 15px; }
         label { display: block; font-size: 13px; font-weight: 500; color: #9ca3af; margin-bottom: 6px; }
-        input[type="text"], textarea { width: 100%; background: #0b0f19; border: 1px solid #374151; color: #e5e7eb; padding: 10px 12px; border-radius: 6px; font-size: 14px; transition: border 0.2s; font-family: inherit; }
+        input[type="text"], textarea, select { width: 100%; background: #0b0f19; border: 1px solid #374151; color: #e5e7eb; padding: 10px 12px; border-radius: 6px; font-size: 14px; transition: border 0.2s; font-family: inherit; }
+        select:focus { outline: none; border-color: #facc15; }
         
         /* İstediğin Ok Kaldırma Düzenlemesi */
         textarea { resize: none; } 
@@ -43,6 +44,8 @@
         .btn-start:disabled { background-color: #374151; color: #9ca3af; cursor: not-allowed; }
         .btn-report { background-color: transparent; color: #facc15; border: 1px solid #facc15; display: none; }
         .btn-report:hover { background-color: #facc15; color: #111827; }
+        .btn-folder { flex: 0 0 auto; background-color: #374151; color: #e5e7eb; padding: 10px 12px; font-size: 13px; }
+        .btn-folder:hover { background-color: #4b5563; }
         .btn-runall { background-color: #34d399; color: #111827; }
         .btn-runall:hover { background-color: #10b981; }
         .btn-runall:disabled { background-color: #374151; color: #9ca3af; cursor: not-allowed; }
@@ -85,6 +88,21 @@
         <div class="input-group">
             <label>Hedef URL</label>
             <input type="text" id="url" placeholder="https://example.com">
+        </div>
+
+        <div class="input-group">
+            <label>📁 Test Klasörü (kayıt + toplu koşum)</label>
+            <div style="display:flex; gap:8px;">
+                <input type="text" id="outputDir" placeholder="Boş bırakılırsa: tests/generated" style="flex:1; min-width:0;">
+                <button type="button" class="btn-folder" onclick="selectFolder()">Klasör Seç</button>
+            </div>
+        </div>
+
+        <div class="input-group">
+            <label>🧠 AI Modeli (Ollama)</label>
+            <select id="modelSelect">
+                <option value="">Varsayılan (.env)</option>
+            </select>
         </div>
 
         <div class="input-group">
@@ -151,6 +169,50 @@
     const dropzoneText = document.getElementById('dropzoneText');
     const codeContainer = document.getElementById('codeContainer');
     const codeBlock = document.getElementById('codeBlock');
+    const outputDirInput = document.getElementById('outputDir');
+    const modelSelect = document.getElementById('modelSelect');
+
+    // 📁 Her kullanıcının kendi klasörü tarayıcısında saklanır (çok kullanıcılı izolasyon):
+    // aynı makinede farklı kullanıcılar / farklı makineler birbirinin klasörünü görmez.
+    outputDirInput.value = localStorage.getItem('qa_output_dir') || '';
+    outputDirInput.addEventListener('change', () => {
+        localStorage.setItem('qa_output_dir', outputDirInput.value.trim());
+    });
+
+    // 🧠 Model seçimi: sunucudan kurulu Ollama modelleri çekilir, seçim saklanır.
+    socket.emit('get_models');
+    socket.on('models_list', (data) => {
+        const saved = localStorage.getItem('qa_model') || '';
+        modelSelect.innerHTML = '';
+        const defOpt = document.createElement('option');
+        defOpt.value = '';
+        defOpt.textContent = `Varsayılan (${data.current || '.env'})`;
+        modelSelect.appendChild(defOpt);
+        (data.models || []).forEach(name => {
+            const opt = document.createElement('option');
+            opt.value = name;
+            opt.textContent = name;
+            if (name === saved) opt.selected = true;
+            modelSelect.appendChild(opt);
+        });
+    });
+    modelSelect.addEventListener('change', () => {
+        localStorage.setItem('qa_model', modelSelect.value);
+    });
+
+    function selectFolder() {
+        socket.emit('select_folder');
+    }
+
+    socket.on('folder_selected', (data) => {
+        if (data && data.path) {
+            outputDirInput.value = data.path;
+            localStorage.setItem('qa_output_dir', data.path);
+        } else if (data && data.error) {
+            alert(data.error);
+        }
+        // data.cancelled -> kullanıcı vazgeçti, sessizce geç
+    });
 
     // Socket Eventleri (Merkezi Konum)
     socket.on('log', (msg) => {
@@ -253,13 +315,15 @@
         reportBtn.style.display = "none";
         statusSpan.style.color = "#facc15"; statusSpan.innerText = "Yürütülüyor...";
 
-        // YENİ: useGrid verisi okunup backend'e gönderiliyor
+        // YENİ: useGrid + kayıt klasörü + model seçimi backend'e gönderiliyor
         socket.emit('start_test', {
             url,
             prompt,
             video: document.getElementById('video').checked,
             screenshot: document.getElementById('screenshot').checked,
-            useGrid: document.getElementById('useGrid').checked
+            useGrid: document.getElementById('useGrid').checked,
+            outputDir: outputDirInput.value.trim(),
+            model: modelSelect.value
         });
     }
 
@@ -271,7 +335,12 @@
         startBtn.disabled = true;
         reportBtn.style.display = "none";
         statusSpan.style.color = "#facc15"; statusSpan.innerText = "Yürütülüyor...";
-        socket.emit('run_all_tests');
+        // Seçili klasördeki TÜM testler paralel koşulur (boşsa varsayılan klasör).
+        // Grid işaretliyse toplu koşum da uzak tarayıcılardan geçer.
+        socket.emit('run_all_tests', {
+            folder: outputDirInput.value.trim(),
+            useGrid: document.getElementById('useGrid').checked
+        });
     }
 </script>
 </body>

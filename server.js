@@ -3,8 +3,10 @@ const http = require('http');
 const { Server } = require('socket.io');
 const path = require('path');
 const fs = require('fs');
+const crypto = require('crypto');
 const multer = require('multer');
 const { spawn } = require('child_process');
+const helmet = require('helmet');
 
 // YENİ MİMARİ BAĞLANTISI (Child Process yerine direkt modül çağrısı)
 require('dotenv').config();
@@ -12,6 +14,7 @@ require('dotenv').config();
 // Ortam değişkenleri kontrolü
 if (!process.env.OLLAMA_URL || !process.env.OLLAMA_MODEL) {
     console.error('❌ HATA: .env dosyasında OLLAMA_URL ve OLLAMA_MODEL tanımlanması gerekli!');
+    console.error('   .env.example dosyasını .env olarak kopyalayıp doldurabilirsiniz.');
     process.exit(1);
 }
 
@@ -28,19 +31,146 @@ process.on('uncaughtException', (err) => {
 });
 
 // ⚠️ DÜZELTME: Eşzamanlılık kilidi. Orchestrator sabit dosya yollarına
-// (ai_generated.spec.ts) ve global process.env'e yazdığından, paralel akışlar
-// birbirinin durumunu/çıktısını bozardı. Aynı anda tek akışa izin veriyoruz.
+// ve global process.env'e yazdığından, paralel akışlar birbirinin durumunu/
+// çıktısını bozardı. Aynı anda tek akışa izin veriyoruz.
 let isFlowRunning = false;
 // Toplu (paralel) koşum için ayrı kilit — AI üretim akışıyla (isFlowRunning) aynı anda
 // çalışırsa dosya/rapor klasörleri çakışabilir, bu yüzden ikisi karşılıklı birbirini engeller.
 let isBatchRunning = false;
 
 const app = express();
+// Proxy arkasındayken (örn. Nginx, load balancer) gerçek istemci IP'si
+// X-Forwarded-For başlığından okunur; aksi halde tüm istekler proxy IP'sinden gelir.
+app.set('trust proxy', 1);
+// 🔒 HTTP güvenlik başlıkları (X-Frame-Options, X-Content-Type-Options, vb.)
+// CSP ve COEP kapalı — Socket.io + satır içi script'lerle çakışır.
+app.use(helmet({ contentSecurityPolicy: false, crossOriginEmbedderPolicy: false }));
 const server = http.createServer(app);
-const io = new Server(server);
+// ⚠️ DÜZELTME: Uzun keşif+self-healing döngüleri dakikalar sürebilir.
+// Varsayılan Socket.io ping timeout (~20sn) bu sürede bağlantıyı koparıyordu.
+const io = new Server(server, { pingTimeout: 120000, pingInterval: 30000 });
+
+// ==========================================================================
+// 🔐 ERİŞİM KORUMASI (APP_TOKEN)
+// --------------------------------------------------------------------------
+// Sunucu kullanıcının kendi makinesinde çalışır ama README'de anlatılan
+// Windows + Mac Mini senaryosunda LAN'a açıktır. Kimlik doğrulama olmadan
+// aynı ağdaki herkes test koşturabilir / klasör oluşturabilirdi.
+// .env içinde APP_TOKEN tanımlıysa hem Socket.io hem korumalı HTTP uçları
+// bu anahtarı ister. Tanımlı değilse (tek makinede lokal kullanım) koruma
+// kapalıdır ve açılışta uyarı basılır.
+// ==========================================================================
+const APP_TOKEN = (process.env.APP_TOKEN || '').trim();
+const AUTH_REQUIRED = APP_TOKEN.length > 0;
+const AUTH_COOKIE = 'qa_auth';
+
+// Zamanlama saldırılarına kapalı karşılaştırma. Uzunluk sızıntısı olmasın diye
+// iki değer de önce sabit uzunlukta hash'lenir.
+function tokenMatches(candidate) {
+    if (!candidate) return false;
+    const a = crypto.createHash('sha256').update(String(candidate)).digest();
+    const b = crypto.createHash('sha256').update(APP_TOKEN).digest();
+    return crypto.timingSafeEqual(a, b);
+}
+
+// cookie-parser bağımlılığı eklemeye değmeyecek kadar basit bir okuma.
+function readCookie(header, name) {
+    if (!header) return null;
+    for (const part of String(header).split(';')) {
+        const idx = part.indexOf('=');
+        if (idx === -1) continue;
+        if (part.slice(0, idx).trim() === name) {
+            try {
+                return decodeURIComponent(part.slice(idx + 1).trim());
+            } catch {
+                return null;
+            }
+        }
+    }
+    return null;
+}
+
+// 🚦 Kaba kuvvet denemelerine karşı basit, bellek içi hız sınırı.
+const authAttempts = new Map(); // ip -> { count, resetAt }
+const AUTH_MAX_ATTEMPTS = 10;
+const AUTH_WINDOW_MS = 60 * 1000;
+
+function registerFailedAuth(ip) {
+    const now = Date.now();
+    const rec = authAttempts.get(ip);
+    if (!rec || now > rec.resetAt) {
+        authAttempts.set(ip, { count: 1, resetAt: now + AUTH_WINDOW_MS });
+        return;
+    }
+    rec.count += 1;
+}
+
+function isAuthBlocked(ip) {
+    const rec = authAttempts.get(ip);
+    if (!rec) return false;
+    if (Date.now() > rec.resetAt) {
+        authAttempts.delete(ip);
+        return false;
+    }
+    return rec.count >= AUTH_MAX_ATTEMPTS;
+}
+
+function requireAuth(req, res, next) {
+    if (!AUTH_REQUIRED) return next();
+    const supplied = req.headers['x-app-token'] ||
+        readCookie(req.headers.cookie, AUTH_COOKIE) ||
+        (req.query && req.query.token);
+    if (tokenMatches(supplied)) return next();
+    res.status(401).json({ error: 'Yetkisiz istek. Geçerli bir erişim anahtarı gerekli.' });
+}
+
+// Socket.io el sıkışmasında anahtar doğrulanır; geçersizse bağlantı hiç kurulmaz.
+io.use((socket, next) => {
+    if (!AUTH_REQUIRED) return next();
+    const supplied = (socket.handshake.auth && socket.handshake.auth.token) ||
+        readCookie(socket.handshake.headers && socket.handshake.headers.cookie, AUTH_COOKIE);
+    if (tokenMatches(supplied)) return next();
+    next(new Error('unauthorized'));
+});
+
+// 📁 Yüklenen senaryo dosyaları için MUTLAK yol. Göreli 'uploads/' kullanılırsa
+// sunucu farklı bir çalışma dizininden başlatıldığında dosyalar yanlış yere düşer.
+const UPLOAD_DIR = path.join(__dirname, 'uploads');
+fs.mkdirSync(UPLOAD_DIR, { recursive: true });
+// ⚠️ DÜZELTME: Sunucu çökmesinde finally bloğu çalışmaz, geçici dosyalar birikir.
+// Başlangıçta kalan eski dosyalar temizlenir.
+try {
+    for (const f of fs.readdirSync(UPLOAD_DIR)) {
+        fs.unlinkSync(path.join(UPLOAD_DIR, f));
+    }
+} catch { /* uploads boşsa veya izin yoksa sessizce geç */ }
+
+// 🔒 URL güvenlik doğrulaması: yalnızca http/https şemasına ve kamuya açık
+// adreslere izin verilir. Tehlikeli şemalar (file://, javascript://, data://)
+// ve iç ağ/loopback hedefleri (SSRF koruması) reddedilir.
+const PRIVATE_IP_RE = /^(localhost|127\.|10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.|::1|0\.0\.0\.0)/i;
+
+function sanitizeTargetUrl(raw) {
+    const trimmed = String(raw || '').trim();
+    if (!trimmed) throw new Error('Hedef URL boş olamaz.');
+    let parsed;
+    try {
+        // Şema yoksa https ekle, sonra parse et.
+        parsed = new URL(trimmed.includes('://') ? trimmed : 'https://' + trimmed);
+    } catch {
+        throw new Error('Geçersiz URL formatı.');
+    }
+    if (!['http:', 'https:'].includes(parsed.protocol)) {
+        throw new Error(`Yalnızca http/https şemasına izin verilir (alınan: ${parsed.protocol}).`);
+    }
+    if (PRIVATE_IP_RE.test(parsed.hostname)) {
+        throw new Error(`Güvenlik: iç ağ veya loopback adreslerine erişim engellendi (${parsed.hostname}).`);
+    }
+    return parsed.href;
+}
 
 const upload = multer({
-    dest: 'uploads/',
+    dest: UPLOAD_DIR,
     limits: { fileSize: 1 * 1024 * 1024 }, // 1 MB üst sınır
     fileFilter: (req, file, cb) => {
         const ok = /\.(txt|feature|md)$/i.test(file.originalname);
@@ -48,15 +178,78 @@ const upload = multer({
     }
 });
 
-app.use(express.static(path.join(__dirname, 'public')));
-app.use('/allure', express.static(path.join(__dirname, 'allure-report')));
 app.use(express.json());
+// Arayüzün kendisi (HTML/CSS/JS) gizli bilgi içermez; giriş ekranını gösterebilmesi
+// için korumasız servis edilir. Gerçek yetenekler (test koşma, klasör seçme,
+// rapor okuma) aşağıda korumalıdır.
+app.use(express.static(path.join(__dirname, 'public')));
 
-// Console logları arayüze basmak için process.stdout'u hookluyoruz (Geçici yönlendirme)
+// Arayüz, giriş ekranı gösterip göstermeyeceğini buradan öğrenir.
+app.get('/api/config', (req, res) => {
+    res.json({ authRequired: AUTH_REQUIRED });
+});
+
+// Anahtar doğrulanırsa cookie yazılır; böylece /allure altındaki onlarca alt kaynak
+// (js/css/json) için ayrı ayrı başlık göndermek gerekmez.
+// ⚠️ DÜZELTME: POST'a alındı — GET olduğunda token URL'ye (sorgu parametresi) giriyordu,
+// sunucu loglarına ve tarayıcı geçmişine düşüyordu.
+app.post('/api/auth', (req, res) => {
+    if (!AUTH_REQUIRED) return res.json({ ok: true, authRequired: false });
+
+    const ip = req.ip || 'bilinmeyen';
+    if (isAuthBlocked(ip)) {
+        return res.status(429).json({ error: 'Çok fazla hatalı deneme. Lütfen bir dakika sonra tekrar deneyin.' });
+    }
+
+    // Token önce başlıktan, yoksa JSON gövdesinden okunur (query param artık kabul edilmiyor).
+    const supplied = req.headers['x-app-token'] || (req.body && req.body.token);
+    if (!tokenMatches(supplied)) {
+        registerFailedAuth(ip);
+        return res.status(401).json({ error: 'Erişim anahtarı hatalı.' });
+    }
+
+    authAttempts.delete(ip);
+    res.cookie(AUTH_COOKIE, APP_TOKEN, {
+        httpOnly: true,
+        // ⚠️ DÜZELTME: 'lax' → 'strict'. Strict modda cookie ASLA başka
+        // bir domain'in isteğiyle gönderilmez → CSRF saldırıları bloklanır.
+        sameSite: 'strict',
+        maxAge: 7 * 24 * 60 * 60 * 1000
+    });
+    res.json({ ok: true, authRequired: true });
+});
+
+app.use('/allure', requireAuth, express.static(path.join(__dirname, 'allure-report')));
+
+// Console logları arayüze basmak için process çıktısını hookluyoruz (Geçici yönlendirme)
 const originalStdoutWrite = process.stdout.write.bind(process.stdout);
+const originalStderrWrite = process.stderr.write.bind(process.stderr);
+
+// ⚠️ DÜZELTME: Önceden yalnızca stdout hooklanıyordu. logger.logError() ise
+// console.error (stderr) kullandığı için "self-healing başarısız", "keşif
+// durduruluyor" gibi KRİTİK satırlar arayüze hiç düşmüyordu. Artık iki akış da
+// köprüleniyor (Playwright'ın stderr çıktısı da dahil).
+function attachConsoleBridge(socket) {
+    process.stdout.write = (chunk, encoding, callback) => {
+        socket.emit('log', chunk.toString());
+        return originalStdoutWrite(chunk, encoding, callback);
+    };
+    process.stderr.write = (chunk, encoding, callback) => {
+        socket.emit('log', chunk.toString());
+        return originalStderrWrite(chunk, encoding, callback);
+    };
+}
+
+function detachConsoleBridge() {
+    process.stdout.write = originalStdoutWrite;
+    process.stderr.write = originalStderrWrite;
+}
 
 // 🔒 İstemciden gelen klasör yolu doğrulanmadan kullanılmaz.
 // Boş/undefined -> null (varsayılan klasör). Geçersizse Error fırlatır.
+// QA_ALLOWED_ROOT tanımlıysa yol ayrıca o kökün altında olmak ZORUNDADIR.
+const ALLOWED_ROOT = process.env.QA_ALLOWED_ROOT ? path.resolve(process.env.QA_ALLOWED_ROOT) : null;
+
 function sanitizeFolderPath(raw) {
     if (raw == null) return null;
     let clean = String(raw).trim().replace(/^"(.*)"$/, '$1').trim(); // yapıştırılan tırnakları soy
@@ -65,6 +258,12 @@ function sanitizeFolderPath(raw) {
     if (/["\r\n<>|*?]/.test(clean)) throw new Error('Klasör yolu geçersiz karakter içeriyor.');
     clean = path.normalize(clean);
     if (!path.isAbsolute(clean)) throw new Error('Klasör yolu tam (absolute) olmalı. Örnek: C:\\QA-Testlerim\\Kampanya');
+    if (ALLOWED_ROOT) {
+        const rel = path.relative(ALLOWED_ROOT, clean);
+        if (rel.startsWith('..') || path.isAbsolute(rel)) {
+            throw new Error(`Klasör yolu izin verilen kök dizinin dışında (QA_ALLOWED_ROOT=${ALLOWED_ROOT}).`);
+        }
+    }
     return clean;
 }
 
@@ -107,25 +306,63 @@ function sanitizeModelName(raw) {
     return clean;
 }
 
-app.post('/upload', (req, res) => {
+// Rapor klasörleri toplu koşum öncesi temizlenir; aksi halde Allure eski ve yeni
+// sonuçları karıştırır.
+function cleanReportDirs() {
+    ['allure-results', 'allure-report', 'playwright-report', 'test-results'].forEach(dir => {
+        const dirPath = path.join(__dirname, dir);
+        if (fs.existsSync(dirPath)) fs.rmSync(dirPath, { recursive: true, force: true });
+    });
+}
+
+const npxCmd = process.platform === 'win32' ? 'npx.cmd' : 'npx';
+
+app.post('/upload', requireAuth, (req, res) => {
     // multer'ı manuel çağırıp boyut/tip hatalarını 400 ile düzgün döndürüyoruz (aksi halde 500).
     upload.single('scenarioFile')(req, res, (uploadErr) => {
         if (uploadErr) return res.status(400).json({ error: uploadErr.message });
         if (!req.file) return res.status(400).json({ error: 'Dosya bulunamadı.' });
         try {
             const fileContent = fs.readFileSync(req.file.path, 'utf-8');
-            fs.unlinkSync(req.file.path);
             res.json({ content: fileContent });
         } catch (err) {
             res.status(500).json({ error: 'Dosya okunamadı: ' + err.message });
+        } finally {
+            // ⚠️ DÜZELTME: Okuma hata verirse de geçici dosya silinsin (uploads/ şişmesin).
+            try { fs.unlinkSync(req.file.path); } catch { /* zaten yok */ }
         }
     });
 });
 
+// 🚦 Socket başına hız sınırı: test başlatma event'ları için son tetiklenme zamanı
+// takip edilir. Kilitler (isFlowRunning) eşzamanlılığı engelliyor olsa da ek
+// güvence olarak tek bir socket'ten spam gönderilmesi önlenir.
+const socketLastEvent = new Map(); // socketId -> lastEventMs
+const SOCKET_EVENT_COOLDOWN_MS = 5000; // 5 saniyede bir başlatma isteği
+
+function checkSocketCooldown(socket, eventName) {
+    const key = `${socket.id}:${eventName}`;
+    const last = socketLastEvent.get(key) || 0;
+    if (Date.now() - last < SOCKET_EVENT_COOLDOWN_MS) return false;
+    socketLastEvent.set(key, Date.now());
+    return true;
+}
+
 io.on('connection', (socket) => {
+    socket.on('disconnect', () => {
+        // Bağlantı kapanınca ilgili rate limit kayıtları temizlenir (bellek sızıntısı önlenir).
+        for (const key of socketLastEvent.keys()) {
+            if (key.startsWith(socket.id + ':')) socketLastEvent.delete(key);
+        }
+    });
     // 📁 Native klasör seçme diyaloğu (Windows: PowerShell, macOS: osascript).
     socket.on('select_folder', () => {
-        if (isPickingFolder) return; // zaten açık bir diyalog var
+        if (isPickingFolder) {
+            // ⚠️ DÜZELTME: Önceden sessizce return ediliyordu; kullanıcı butonun
+            // çalışmadığını sanıyordu. Artık nedeni bildiriliyor.
+            socket.emit('folder_selected', { error: 'Zaten açık bir klasör seçme penceresi var. Lütfen önce onu tamamlayın.' });
+            return;
+        }
         const dialog = spawnFolderDialog();
         if (!dialog) {
             socket.emit('folder_selected', { error: 'Klasör seçme diyaloğu bu işletim sisteminde desteklenmiyor. Yolu elle yazabilirsiniz.' });
@@ -154,6 +391,7 @@ io.on('connection', (socket) => {
         try {
             if (!tagsUrl) throw new Error('OLLAMA_URL çözümlenemedi');
             const res = await fetch(tagsUrl, { signal: AbortSignal.timeout(5000) });
+            if (!res.ok) throw new Error(`Ollama HTTP ${res.status}`);
             const data = await res.json();
             const models = (data.models || []).map(m => m.name);
             socket.emit('models_list', { models, current: process.env.OLLAMA_MODEL });
@@ -163,6 +401,11 @@ io.on('connection', (socket) => {
     });
 
     socket.on('start_test', async (data) => {
+        if (!checkSocketCooldown(socket, 'start_test')) {
+            socket.emit('log', `\n⛔ Çok hızlı istek. Lütfen birkaç saniye bekleyip tekrar deneyin.\n`);
+            socket.emit('test_finished');
+            return;
+        }
         // ⚠️ DÜZELTME: Bir akış çalışırken gelen ikinci istek, stdout hook'u kurulmadan
         // ÖNCE reddedilir (aksi halde hook'lar çakışır, dosyalar ezişir).
         if (isFlowRunning || isBatchRunning) {
@@ -171,7 +414,23 @@ io.on('connection', (socket) => {
             return;
         }
 
-        const { url, prompt, video, screenshot, useGrid, outputDir, model } = data;
+        const { url, prompt, video, screenshot, useGrid, outputDir, model } = data || {};
+
+        if (!url || !String(url).trim() || !prompt || !String(prompt).trim()) {
+            socket.emit('log', `\n❌ Girdi hatası: Hedef URL ve senaryo metni zorunludur.\n`);
+            socket.emit('test_finished');
+            return;
+        }
+
+        // 🔒 URL güvenlik doğrulaması: tehlikeli şemalar ve iç ağ adresleri reddedilir.
+        let safeUrl;
+        try {
+            safeUrl = sanitizeTargetUrl(url);
+        } catch (e) {
+            socket.emit('log', `\n❌ URL hatası: ${e.message}\n`);
+            socket.emit('test_finished');
+            return;
+        }
 
         // 📁 Kayıt klasörü + 🧠 model seçimi doğrulanır (boşsa varsayılanlar kullanılır).
         let targetDir = null;
@@ -187,46 +446,46 @@ io.on('connection', (socket) => {
         }
         isFlowRunning = true;
 
-        // BÜTÜNLEŞTİRİCİ GRID ATAMASI: Hem DOM (orchestrator) hem Playwright (compiler) için
-        if (useGrid && process.env.GRID_WS_ENDPOINT) {
-            process.env.PW_WS_ENDPOINT = process.env.GRID_WS_ENDPOINT; // Playwright Compiler için
-            process.env.GRID_URL = process.env.GRID_WS_ENDPOINT;       // DOM Extractor (orchestrator) için
+        // ☁️ GRID ATAMASI: Derlenen Playwright testi PW_WS_ENDPOINT'i okur.
+        // (Keşif fazı doğrudan GRID_WS_ENDPOINT'e bakar; ayrı bir değişkene gerek yok.)
+        const gridActive = !!useGrid && !!process.env.GRID_WS_ENDPOINT;
+        if (gridActive) {
+            process.env.PW_WS_ENDPOINT = process.env.GRID_WS_ENDPOINT;
         } else {
-            // Lokal çalışmada kafasının karışmaması için değişkenleri temizliyoruz
+            // Lokal çalışmada önceki akıştan kalan değer karışıklık yaratmasın.
             delete process.env.PW_WS_ENDPOINT;
-            delete process.env.GRID_URL;
         }
-        
-        socket.emit('log', `🚀 YENİ TEST BAŞLATILDI\n🌐 Hedef: ${url}`);
-        socket.emit('log', `🖥️ Ortam: ${useGrid ? '☁️ Uzak Sunucu (Selenium Grid)' : '💻 Lokal Makine'}`);
-        socket.emit('log', `📁 Kayıt Klasörü: ${targetDir || 'tests/generated (varsayılan)'}`);
-        socket.emit('log', `🧠 Model: ${selectedModel || process.env.OLLAMA_MODEL + ' (varsayılan)'}\n`);
-        
-        // Node terminaline yazılan her şeyi arayüze (Socket) basan hook
-        process.stdout.write = (chunk, encoding, callback) => {
-            socket.emit('log', chunk.toString());
-            originalStdoutWrite(chunk, encoding, callback);
-        };
 
-        socket.emit('log', `\n==================================================\n`);
-        socket.emit('log', `🚀 YENİ TEST BAŞLATILDI (Modüler Mimari)\n🌐 Hedef: ${url}\n`);
-        socket.emit('log', `==================================================\n`);
-
-        process.env.TARGET_URL = url;
+        process.env.TARGET_URL = safeUrl;
         process.env.SAVE_VIDEO = video ? 'retain-on-failure' : 'off';
         process.env.SAVE_SCREENSHOT = screenshot ? 'only-on-failure' : 'off';
 
+        // ⚠️ DÜZELTME: Aynı bilgiyi iki kez basan tekrarlı banner tek bloğa indirildi.
+        socket.emit('log', `\n==================================================\n`);
+        socket.emit('log', `🚀 YENİ TEST BAŞLATILDI (Modüler Mimari)\n`);
+        socket.emit('log', `🌐 Hedef: ${safeUrl}\n`);
+        socket.emit('log', `🖥️ Ortam: ${gridActive ? '☁️ Uzak Sunucu (Grid)' : '💻 Lokal Makine'}\n`);
+        socket.emit('log', `📁 Kayıt Klasörü: ${targetDir || 'tests/generated (varsayılan)'}\n`);
+        socket.emit('log', `🧠 Model: ${selectedModel || process.env.OLLAMA_MODEL + ' (varsayılan)'}\n`);
+        socket.emit('log', `==================================================\n`);
+
+        if (useGrid && !process.env.GRID_WS_ENDPOINT) {
+            socket.emit('log', `\n⚠️ "Uzak Sunucuda Çalıştır" seçili ama .env içinde GRID_WS_ENDPOINT tanımlı değil — lokal tarayıcı kullanılacak.\n`);
+        }
+
+        attachConsoleBridge(socket);
+
         try {
             // YENİ MİMARİ: Orchestrator'ı doğrudan çağırıyoruz (Child Process hantallığı bitti)
-            const { exitCode, featurePath, specPath } = await executeAutonomousFlow(url, prompt, useGrid, targetDir, selectedModel);
+            const { exitCode, featurePath, specPath } = await executeAutonomousFlow(safeUrl, prompt, gridActive, targetDir, selectedModel);
 
             socket.emit('log', `\n✅ Test Döngüsü Tamamlandı. (Çıkış Kodu: ${exitCode})\n`);
 
             let tsCode = "// TS Kodu bulunamadı";
             let featureCode = "// Feature dosyası bulunamadı";
 
-            if (fs.existsSync(specPath)) tsCode = fs.readFileSync(specPath, 'utf-8');
-            if (fs.existsSync(featurePath)) featureCode = fs.readFileSync(featurePath, 'utf-8');
+            if (specPath && fs.existsSync(specPath)) tsCode = fs.readFileSync(specPath, 'utf-8');
+            if (featurePath && fs.existsSync(featurePath)) featureCode = fs.readFileSync(featurePath, 'utf-8');
 
             socket.emit('test_code', { ts: tsCode, feature: featureCode });
             socket.emit('test_finished');
@@ -236,12 +495,17 @@ io.on('connection', (socket) => {
             socket.emit('test_finished'); // Hata alsa bile butonu aktif et
         } finally {
             // Hook'u kapat ve eşzamanlılık kilidini serbest bırak
-            process.stdout.write = originalStdoutWrite;
+            detachConsoleBridge();
             isFlowRunning = false;
         }
     });
 
     socket.on('run_all_tests', (data = {}) => {
+        if (!checkSocketCooldown(socket, 'run_all_tests')) {
+            socket.emit('log', `\n⛔ Çok hızlı istek. Lütfen birkaç saniye bekleyip tekrar deneyin.\n`);
+            socket.emit('all_tests_finished');
+            return;
+        }
         if (isFlowRunning || isBatchRunning) {
             socket.emit('log', `\n⛔ Şu anda başka bir test akışı çalışıyor. Lütfen tamamlanmasını bekleyip tekrar deneyin.\n`);
             socket.emit('all_tests_finished');
@@ -284,26 +548,34 @@ io.on('connection', (socket) => {
         // ☁️ Grid seçimi: toplu koşum da tekil akış gibi Grid'i destekler. Yapışkan
         // global env yerine çocuk sürece ÖZEL env kurulur (önceki akıştan kalan
         // PW_WS_ENDPOINT değeri toplu koşumu asla etkilemez).
-        const useGrid = !!data.useGrid && !!process.env.GRID_WS_ENDPOINT;
+        const gridActive = !!data.useGrid && !!process.env.GRID_WS_ENDPOINT;
 
         isBatchRunning = true;
         socket.emit('log', `\n==================================================\n`);
-        socket.emit('log', `🚀 KLASÖRDEKİ TÜM TESTLER PARALEL ÇALIŞTIRILIYOR\n📂 Klasör: ${batchDir}\n🧪 Bulunan test dosyası: ${staged.count}\n🖥️ Ortam: ${useGrid ? '☁️ Uzak Sunucu (Selenium Grid)' : '💻 Lokal Makine'}\n`);
+        socket.emit('log', `🚀 KLASÖRDEKİ TÜM TESTLER PARALEL ÇALIŞTIRILIYOR\n📂 Klasör: ${batchDir}\n🧪 Bulunan test dosyası: ${staged.count}\n🖥️ Ortam: ${gridActive ? '☁️ Uzak Sunucu (Grid)' : '💻 Lokal Makine'}\n`);
         socket.emit('log', `==================================================\n`);
 
-        // Önceki (tekil veya toplu) koşumdan kalan rapor klasörleri temizlenir; aksi halde
-        // Allure raporu eski ve yeni sonuçları karıştırır.
-        ['allure-results', 'allure-report', 'playwright-report', 'test-results'].forEach(dir => {
-            const dirPath = path.join(__dirname, dir);
-            if (fs.existsSync(dirPath)) fs.rmSync(dirPath, { recursive: true, force: true });
-        });
+        if (data.useGrid && !process.env.GRID_WS_ENDPOINT) {
+            socket.emit('log', `\n⚠️ "Uzak Sunucuda Çalıştır" seçili ama .env içinde GRID_WS_ENDPOINT tanımlı değil — lokal tarayıcı kullanılacak.\n`);
+        }
+
+        cleanReportDirs();
 
         // Hazırlık klasörü PW_TEST_DIR env'i ile config'e iletilir; klasör yolu
         // CLI argümanına hiç girmez (boşluklu yol/kaçışlama derdi yok).
         const envVars = { ...process.env, FORCE_COLOR: '1', PW_TEST_DIR: staged.stagingDir };
-        if (useGrid) envVars.PW_WS_ENDPOINT = process.env.GRID_WS_ENDPOINT;
+        if (gridActive) envVars.PW_WS_ENDPOINT = process.env.GRID_WS_ENDPOINT;
         else delete envVars.PW_WS_ENDPOINT; // önceki tekil akıştan kalan değer temizlenir
-        const npxCmd = process.platform === 'win32' ? 'npx.cmd' : 'npx';
+
+        // ⚠️ Kilit her çıkış yolunda TAM BİR KEZ bırakılmalı; 'error' ve 'close'
+        // birlikte tetiklenebildiği için tek noktadan yönetiliyor.
+        let batchFinished = false;
+        const finishBatch = () => {
+            if (batchFinished) return;
+            batchFinished = true;
+            socket.emit('all_tests_finished');
+            isBatchRunning = false;
+        };
 
         const testProcess = spawn(npxCmd, ['playwright', 'test', '--reporter=list,allure-playwright'], {
             env: envVars, shell: true, cwd: __dirname
@@ -311,22 +583,25 @@ io.on('connection', (socket) => {
 
         testProcess.on('error', (err) => {
             socket.emit('log', `\n❌ Playwright süreci başlatılamadı: ${err.message}\n`);
-            socket.emit('all_tests_finished');
-            isBatchRunning = false;
+            finishBatch();
         });
 
-        testProcess.stdout.on('data', (data) => socket.emit('log', data.toString()));
-        testProcess.stderr.on('data', (data) => socket.emit('log', data.toString()));
+        testProcess.stdout.on('data', (chunk) => socket.emit('log', chunk.toString()));
+        testProcess.stderr.on('data', (chunk) => socket.emit('log', chunk.toString()));
 
         testProcess.on('close', (code) => {
+            if (batchFinished) return;
             socket.emit('log', `\n✅ Paralel Koşum Tamamlandı. (Çıkış Kodu: ${code})\n📊 Allure raporu derleniyor...\n`);
 
-            const allureProcess = spawn(npxCmd, ['allure', 'generate', './allure-results', '-o', './allure-report', '--clean'], { shell: true });
+            // ⚠️ DÜZELTME: cwd eklendi. Göreli './allure-results' yolları sunucu farklı
+            // bir dizinden başlatıldığında yanlış klasöre bakıyordu.
+            const allureProcess = spawn(npxCmd, ['allure', 'generate', './allure-results', '-o', './allure-report', '--clean'], {
+                shell: true, cwd: __dirname
+            });
 
             allureProcess.on('error', (err) => {
                 socket.emit('log', `\n⚠️ Allure raporu üretilemedi (rapor atlanıyor): ${err.message}\n`);
-                socket.emit('all_tests_finished');
-                isBatchRunning = false;
+                finishBatch();
             });
 
             allureProcess.on('close', (allureCode) => {
@@ -335,21 +610,64 @@ io.on('connection', (socket) => {
                 } else {
                     socket.emit('log', `\n⚠️ Allure ${allureCode} koduyla bitti; rapor eksik olabilir.\n`);
                 }
-                socket.emit('all_tests_finished');
-                isBatchRunning = false;
+                finishBatch();
             });
         });
     });
 
     socket.on('open_report', () => {
+        // Rapor henüz üretilmemişse kullanıcıyı boş bir 404'e göndermek yerine bilgilendir.
+        if (!fs.existsSync(path.join(__dirname, 'allure-report', 'index.html'))) {
+            socket.emit('log', `\n⚠️ Henüz derlenmiş bir Allure raporu yok. Önce bir test koşumu tamamlayın.\n`);
+            return;
+        }
         socket.emit('log', `\n📊 Rapor tarayıcıda açılıyor...\n`);
-        socket.emit('redirect_to_report'); 
+        socket.emit('redirect_to_report');
     });
 });
 
 const PORT = process.env.PORT || 3000;
-server.listen(PORT, () => {
+// Varsayılan olarak tüm arayüzlere bağlanır (README'deki Windows + Mac Mini
+// senaryosu için). Tek makinede kullanıyorsanız .env'de HOST=127.0.0.1 verip
+// sunucuyu tamamen dışarı kapatabilirsiniz.
+const HOST = process.env.HOST || '0.0.0.0';
+
+server.listen(PORT, HOST, () => {
     console.log(`\n===========================================`);
     console.log(`🌐 QA MANAGEMENT SERVER AKTİF - PORT: ${PORT}`);
+    console.log(`   Adres : http://localhost:${PORT}`);
+    console.log(`   Erişim: ${HOST === '127.0.0.1' ? 'yalnızca bu makine' : 'ağa açık (' + HOST + ')'}`);
+    if (AUTH_REQUIRED) {
+        console.log(`   Koruma: 🔐 APP_TOKEN AKTİF`);
+    } else {
+        console.log(`   Koruma: ⚠️ YOK — .env içinde APP_TOKEN tanımlayarak koruma açılır`);
+    }
     console.log(`===========================================\n`);
+
+    // ⚠️ DÜZELTME: Ollama erişilebilirlik kontrolü — .env'deki URL geçerli ama
+    // servis gerçekte çalışmıyorsa ilk test koşumuna kadar fark edilmiyordu.
+    const tagsUrl = deriveOllamaTagsUrl();
+    if (tagsUrl) {
+        fetch(tagsUrl, { signal: AbortSignal.timeout(5000) })
+            .then(r => r.ok ? r.json() : Promise.reject(new Error(`HTTP ${r.status}`)))
+            .then(d => {
+                const count = (d.models || []).length;
+                console.log(`✅ Ollama bağlantısı başarılı — ${count} model yüklü.`);
+            })
+            .catch(e => {
+                console.warn(`⚠️ Ollama'ya ulaşılamıyor (${tagsUrl}): ${e.message}`);
+                console.warn(`   Ollama çalışıyor mu? "ollama serve" komutunu kontrol edin.`);
+            });
+    }
+});
+
+// Ctrl+C / kill sinyallerinde açık bağlantıları düzgün kapat.
+['SIGINT', 'SIGTERM'].forEach(sig => {
+    process.on(sig, () => {
+        console.log(`\n👋 ${sig} alındı, sunucu kapatılıyor...`);
+        io.close();
+        server.close(() => process.exit(0));
+        // Askıda kalan bağlantılar varsa da süreç sonlansın.
+        setTimeout(() => process.exit(0), 5000).unref();
+    });
 });

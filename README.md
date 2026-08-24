@@ -2,7 +2,9 @@
 
 Bu proje, modern web uygulamalarının test süreçlerini optimize etmek amacıyla geliştirilmiş, **Yapay Zeka (Qwen 2.5 Coder)** destekli otonom bir test otomasyon mimarisidir.
 
-Doğal dil ile verilen test senaryolarını analiz eder, hedef web sayfasının DOM yapısını yorumlar ve **Playwright** üzerinden dinamik olarak çalıştırılabilir test kodları (Strict Assertion destekli) oluşturarak otomatik test süreçlerini yürütür.
+Doğal dil ile verilen test senaryolarını analiz eder, hedef web sayfasının DOM yapısını yorumlar ve **Playwright** üzerinden çalıştırılabilir, doğrulama (assertion) içeren test kodları üreterek otomatik test süreçlerini yürütür.
+
+Üretilen doğrulamalar boş beklenen değerle yazılmaz: beklenen değeri olmayan bir `url`/`text` doğrulaması her koşulda geçeceği için teste hiç eklenmez, böylece "hep yeşil yanan ama hiçbir şey güvence altına almayan" testler oluşmaz.
 
 ---
 
@@ -14,7 +16,7 @@ Test senaryoları manuel ve statik şekilde yazılmaz. Sistem, hedef sayfanın c
 
 ## 🌐 Uzak Sunucu (Grid) Desteği
 
-Selenium Grid 4 veya Playwright Grid altyapıları üzerinden CDP (Chrome DevTools Protocol) desteği ile uzak tarayıcıları yönetebilir.
+Playwright protokolü konuşan bir uzak tarayıcı sunucusuna (`npx playwright run-server` veya Aerokube Moon) bağlanarak hem keşif fazını hem derlenen testlerin koşumunu başka bir makinede yürütebilir.
 
 ## 🖥️ Dahili Web Arayüzü (UI)
 
@@ -24,9 +26,9 @@ Teknik olmayan kullanıcıların da kolayca test başlatabilmesi için `Socket.i
 
 Her test çalıştırmasının ardından otomatik olarak detaylı **Allure Reports** oluşturulur ve tarayıcı üzerinden görüntülenebilir.
 
-## 🚫 Reklam ve Pop-up Engelleme
+## 🚫 Reklam Gürültüsünün Elenmesi
 
-Google Ads, üçüncü parti iframe’ler ve pop-up içerikleri otomatik olarak engellenerek test stabilitesi artırılır.
+DOM taranırken reklam/sponsorlu görünen elemanlar (`[id*="ad"]`, `[class*="sponsored"]`, `[class*="promo"]`, `[class*="reklam"]` altındakiler) ile görünmeyen elemanlar dışarıda bırakılır. Böylece modele yalnızca gerçekten etkileşilebilir elemanlar gider; hem token tüketimi hem yanlış locator seçme riski düşer. Yeni açılan sekmeler otomatik olarak takip edilir ve ajan odağını yeni sekmeye kaydırır.
 
 ## 📁 Kullanıcıya Özel Test Klasörü
 
@@ -88,22 +90,33 @@ ollama run qwen2.5-coder:7b
 
 ## 5. `.env` Dosyasını Oluşturun
 
-Proje ana dizininde `.env` dosyası oluşturup aşağıdaki ayarları yapılandırın:
+En kolayı şablonu kopyalamaktır — tüm değişkenler açıklamalarıyla birlikte `.env.example` içindedir:
+
+```bash
+cp .env.example .env     # Windows PowerShell: copy .env.example .env
+```
+
+Asgari yapılandırma:
 
 ```env
-# AI MODEL AYARLARI
+# AI MODEL AYARLARI (ZORUNLU — ikisi de tanımlı değilse sunucu açılmaz)
 OLLAMA_MODEL=qwen2.5-coder:7b
-# İsteğe bağlı olarak daha güçlü modeller kullanılabilir.
-
 OLLAMA_URL=http://127.0.0.1:11434/api/chat
 
-# GRID AYARLARI
-# GRID_URL=ws://localhost:4444/
+# ERİŞİM KORUMASI (ağa açık kullanımda MUTLAKA doldurun — bkz. "Güvenlik")
+APP_TOKEN=
+
+# UZAK TARAYICI / GRID (opsiyonel)
+# GRID_WS_ENDPOINT=ws://localhost:4444/playwright/chromium
 
 # MEDYA KAYIT AYARLARI
 SAVE_VIDEO=off
 SAVE_SCREENSHOT=only-on-failure
 ```
+
+> Keşif fazı varsayılan olarak **görünür** bir tarayıcı açar. Ekransız bir ortamda
+> (SSH ile bağlanılan Mac Mini, Docker, CI) çalıştıracaksanız `.env` dosyasına
+> `HEADLESS=true` ekleyin.
 
 ## 6. Sunucuyu Başlatın
 
@@ -135,17 +148,20 @@ Canlı loglar ve test süreçleri gerçek zamanlı olarak arayüz üzerinden tak
 
 ## 2. Terminal (CLI) Üzerinden Kullanım
 
-Doğrudan terminal üzerinden test çalıştırmak için:
+Doğrudan terminal üzerinden test çalıştırmak için **hedef URL ve senaryo metni birlikte** verilir:
 
 ```bash
-node ai-agent2.js "Arama kutusuna 'telefon' yaz ve enter tuşuna bas"
+node ai-agent2.js <url> "<senaryo>" [--grid]
 ```
 
-Örnek:
+Örnekler:
 
 ```bash
-node ai-agent2.js "Login butonuna tıkla ve kullanıcı girişini doğrula"
+node ai-agent2.js https://www.saucedemo.com "standard_user ile giriş yap ve ilk ürünü sepete ekle"
+node ai-agent2.js https://www.example.com "Arama kutusuna 'telefon' yaz ve enter tuşuna bas"
 ```
+
+Kullanım özetini görmek için: `node ai-agent2.js --help`
 
 ---
 
@@ -153,6 +169,8 @@ node ai-agent2.js "Login butonuna tıkla ve kullanıcı girişini doğrula"
 
 Her üretilen test artık üzerine yazılmaz; `tests/generated/features/` altında BDD/Gherkin
 `.feature` dosyası, `tests/generated/specs/` altında eşleşen Playwright betiği olarak kalıcı biriktirilir.
+İkisi **birlikte** yazılır: keşif hiçbir uygulanabilir adım üretemezse kütüphaneye hiçbir şey
+eklenmez, böylece eşi olmayan `.feature` ya da hiçbir şey doğrulamayan boş `.spec.ts` birikmez.
 
 Biriken tüm testleri paralel çalıştırmak için:
 
@@ -219,32 +237,53 @@ Bu yapı aşağıdaki temel bileşenlerden oluşur:
 
 ```bash
 .
-├── server.js
-├── ai-agent2.js
+├── server.js                 # Express & Socket.io sunucusu, erişim koruması
+├── ai-agent2.js              # CLI giriş noktası
 ├── playwright.config.ts
 ├── public/
-│   └── index.html
+│   └── index.html            # Kontrol paneli (tek dosya arayüz)
+├── src/
+│   ├── core/
+│   │   └── orchestrator.js   # Keşif döngüsü + self-healing + derleme boru hattı
+│   ├── services/
+│   │   ├── ai.service.js     # Ollama çağrıları (planner, locator, self-healing)
+│   │   ├── compiler.service.js # Adım geçmişi -> .spec.ts üretimi
+│   │   └── dom.ranker.js     # DOM kırpma / alaka sıralaması
+│   └── utils/
+│       ├── logger.js
+│       ├── staging.js        # Koşum öncesi spec kopyalama (.batch-staging/)
+│       └── steps.js          # Eylem normalizasyonu + doğrulama kuralları
+├── pages/                    # Elle yazılmış Page Object örnekleri
 ├── tests/
+│   ├── advanced_scenarios.spec.ts   # Elle yazılmış örnek testler
 │   └── generated/
-│       ├── features/   # Kalıcı .feature dosyaları
-│       └── specs/      # Kalıcı, derlenmiş .spec.ts dosyaları
-├── reports/
+│       ├── features/         # Kalıcı .feature dosyaları
+│       └── specs/            # Kalıcı, derlenmiş .spec.ts dosyaları
+├── scripts/pick-folder.ps1   # Windows native klasör seçme diyaloğu
+├── .github/workflows/ci.yml  # Tip kontrolü + sözdizimi kapısı
 ├── .env
 └── .env.example
 ```
 
+Koşum çıktıları (`allure-results/`, `allure-report/`, `playwright-report/`,
+`test-results/`, `.batch-staging/`, `uploads/`) her koşumda yeniden üretilir ve
+`.gitignore` içindedir.
+
 ## Dosya Açıklamaları
 
-| Dosya                          | Açıklama                                    |
-| ------------------------------ | -------------------------------------------- |
-| `server.js`                    | Express & Socket.io tabanlı ana sunucu       |
-| `ai-agent2.js`                 | Yapay zeka destekli otomasyon ajanı          |
-| `playwright.config.ts`         | Playwright yapılandırmaları                  |
-| `public/index.html`            | Kullanıcı arayüzü                            |
-| `tests/generated/features/`    | Kalıcı BDD/Gherkin senaryo kütüphanesi       |
-| `tests/generated/specs/`       | Kalıcı, koşulabilir Playwright betikleri     |
-| `reports/`                     | Allure rapor çıktıları                       |
-| `.env.example`                 | Ortam değişkeni şablonu (çoklu makine kurulumu için) |
+| Dosya                          | Açıklama                                             |
+| ------------------------------ | ---------------------------------------------------- |
+| `server.js`                    | Express & Socket.io tabanlı ana sunucu               |
+| `ai-agent2.js`                 | Yapay zeka destekli otomasyon ajanı (CLI)            |
+| `src/core/orchestrator.js`     | Keşif → self-healing → derleme → koşum boru hattı    |
+| `src/services/`                | LLM çağrıları, kod üretimi, DOM sıralaması           |
+| `src/utils/steps.js`           | Keşif ve derlemenin paylaştığı eylem kuralları       |
+| `playwright.config.ts`         | Playwright yapılandırmaları                          |
+| `public/index.html`            | Kullanıcı arayüzü                                    |
+| `tests/generated/features/`    | Kalıcı BDD/Gherkin senaryo kütüphanesi               |
+| `tests/generated/specs/`       | Kalıcı, koşulabilir Playwright betikleri             |
+| `allure-report/`               | Derlenmiş Allure rapor çıktısı (arayüzden açılır)    |
+| `.env.example`                 | Ortam değişkeni şablonu (tüm değişkenler açıklamalı) |
 
 ---
 
@@ -270,6 +309,47 @@ Bu yapı aşağıdaki temel bileşenlerden oluşur:
 
 ---
 
+# 🔒 Güvenlik
+
+Sunucu, kullanıcının kendi makinesinde çalışır ama yukarıdaki Windows + Mac Mini
+senaryosunda **LAN'a açıktır**. Kimlik doğrulama olmadan aynı ağdaki herkes test
+koşturabilir, klasör oluşturabilir ve raporları okuyabilir.
+
+**Erişim anahtarı (`APP_TOKEN`)**
+
+`.env` dosyasında `APP_TOKEN` tanımlıysa arayüz bir giriş ekranı gösterir; Socket.io
+bağlantısı, dosya yükleme (`/upload`) ve Allure raporu (`/allure`) bu anahtar olmadan
+reddedilir. Anahtar tarayıcıda saklanır, her seferinde yeniden girmek gerekmez.
+
+```bash
+# Rastgele bir anahtar üretin ve .env dosyasına yazın
+openssl rand -hex 24
+```
+
+`APP_TOKEN` boş bırakılırsa koruma **kapalıdır** ve sunucu açılışta bunu uyarı olarak
+basar. Tek makinede lokal kullanım için sorun değildir; bu durumda `HOST=127.0.0.1`
+ayarlayarak sunucuyu ağa hiç açmamanız önerilir.
+
+**Ek sıkılaştırma (opsiyonel)**
+
+* `HOST=127.0.0.1` → sunucu yalnızca kendi makinesinden erişilebilir olur.
+* `QA_ALLOWED_ROOT=C:\QA-Testlerim` → arayüzden seçilebilecek test klasörlerini tek bir
+  kök dizinin altına kısıtlar; bu kökün dışındaki yollar reddedilir.
+
+---
+
+# ✅ Kod Kalitesi
+
+```bash
+npm run typecheck      # TypeScript tip kontrolü (tsc --noEmit)
+```
+
+`.github/workflows/ci.yml`, her push ve pull request'te bağımlılıkları kurup tip
+kontrolü ile Node sözdizimi kontrolünü çalıştırır. Gerçek test koşumu CI'da bilinçli
+olarak yapılmaz — testler canlı bir Ollama örneği ve gerçek hedef sitelere erişim ister.
+
+---
+
 # 📌 Gelecek Planları
 
 * Çoklu LLM desteği
@@ -281,10 +361,12 @@ Bu yapı aşağıdaki temel bileşenlerden oluşur:
 
 # 🌿 Geliştirme Dalları (Branch'ler)
 
-| Dal                             | Durum                     | Açıklama                                                                 |
-| -------------------------------- | ------------------------- | ------------------------------------------------------------------------ |
-| `main`                            | Kararlı / yayın           | Selenium Grid entegrasyonuna kadar olan kararlı sürüm.                   |
-| `refactor/stability-self-healing` | Geçmiş geliştirme         | Kararlılık düzeltmeleri, DOM chunking, self-healing ve eylem repertuarı (hover/dragAndDrop) çalışmalarının yapıldığı dal; `fix/security-and-cleanup` bu dalın devamıdır. |
-| `fix/security-and-cleanup`        | **Aktif geliştirme (güncel)** | Güvenlik/temizlik düzeltmeleri, self-healing ve keşif döngüsü iyileştirmeleri ile bu belgede anlatılan kalıcı Gherkin test kütüphanesi, tek tık paralel koşum ve çoklu makine (Mac Mini) desteğini içeren, üzerinde çalışılan güncel dal. |
+| Dal                             | Durum                 | Açıklama                                                                 |
+| -------------------------------- | --------------------- | ------------------------------------------------------------------------ |
+| `main`                            | **Güncel / yayın**    | Bu belgede anlatılan tüm özellikleri içeren güncel sürüm.                |
+| `fix/security-and-cleanup`        | `main` ile eşit       | Güvenlik/temizlik düzeltmeleri, self-healing ve keşif döngüsü iyileştirmeleri, kalıcı Gherkin kütüphanesi ve çoklu makine desteği bu dalda geliştirildi; `main`'e alındı. |
+| `refactor/stability-self-healing` | Geçmiş geliştirme     | Kararlılık düzeltmeleri, DOM chunking, self-healing ve eylem repertuarı (hover/dragAndDrop) çalışmalarının yapıldığı dal. |
 
-Yeni özellikler ve düzeltmeler şu an `fix/security-and-cleanup` dalına ekleniyor; `main`'e alınması ayrı bir PR/merge kararı gerektirir.
+`main` ve `fix/security-and-cleanup` şu anda **aynı commit'i** gösteriyor; geliştirme
+tamamlanıp birleştirildiği için ikisi arasında fark yoktur. Yeni bir çalışmaya
+başlarken `main`'den yeni bir dal açmanız önerilir.

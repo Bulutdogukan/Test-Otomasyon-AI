@@ -1,16 +1,12 @@
 const { logInfo, logSuccess } = require('../utils/logger');
 
 function cleanModelOutput(rawText) {
-    return rawText.replace(/```json/gi, '').replace(/```/g, '').trim();
-}
-
-function isValidTestJSON(text) {
-    try {
-        const parsed = JSON.parse(cleanModelOutput(text));
-        return parsed && (Array.isArray(parsed) || (parsed.tests && Array.isArray(parsed.tests)));
-    } catch {
-        return false;
-    }
+    // ⚠️ DÜZELTME: Önce metin içindeki JSON nesnesini bul (LLM çoğu zaman
+    // açıklama metni + JSON karışık döndürür). Eşleşme olursa doğrudan al;
+    // yoksa eski yöntemle markdown fence'leri soy.
+    const jsonMatch = rawText.match(/\{[\s\S]*\}/);
+    if (jsonMatch) return jsonMatch[0].trim();
+    return rawText.replace(/```(?:json)?/gi, '').trim();
 }
 
 async function agentPlanTest(userScenario, model, apiUrl) {
@@ -52,12 +48,8 @@ ONLY output text starting with 'Feature:'.`;
         }
 
         const data = await response.json();
-        if (data.error) throw new Error(`Ollama Hatası: ${data.error}`);
-        if (!data.message || typeof data.message.content === 'undefined') {
-            throw new Error(`Beklenmeyen API Yanıtı Formatı: ${JSON.stringify(data)}`);
-        }
-
-        const output = data.message.content.trim();
+        // Hata gövdesi / eksik alan kontrolü requestJsonStep ile aynı yardımcıdan geçer.
+        const output = extractMessageContent(data, 'Agent 1').trim();
         if (!output.startsWith('Feature:')) {
             throw new Error('Agent 1 çıktısı geçerli bir BDD Feature biçiminde değil. Çıktı Feature: ile başlamalı.');
         }
@@ -73,14 +65,31 @@ ONLY output text starting with 'Feature:'.`;
     }
 }
 
+// Ollama, model bulunamadığında / yüklenemediğinde HTTP 200 + { error: "..." }
+// dönebilir. Bu gövde doğrulanmadan data.message.content okunursa ham bir
+// "Cannot read properties of undefined" TypeError'ı patlar ve kullanıcı asıl
+// nedeni (örn. "model 'qwen2.5-coder:32b' not found") hiç göremez.
+function extractMessageContent(data, label) {
+    if (data && data.error) {
+        const detail = typeof data.error === 'string' ? data.error : JSON.stringify(data.error);
+        throw new Error(`${label} — Ollama hatası: ${detail}`);
+    }
+    if (!data || !data.message || typeof data.message.content !== 'string') {
+        throw new Error(`${label} — Beklenmeyen API yanıtı formatı: ${JSON.stringify(data).slice(0, 300)}`);
+    }
+    return data.message.content;
+}
+
 // Ortak Ollama JSON çağrısı: per-attempt AbortController (Faz 1 düzeltmesi),
 // 2 deneme + markdown temizleme + JSON parse. Agent 2 ve Self-Healing paylaşır
 // (timeout/retry mantığı tek yerde — ikinci kez kopyalanıp regresyona yol açmaz).
 async function requestJsonStep({ systemPrompt, userPrompt, model, apiUrl, timeoutMs = 60000, label = 'Agent' }) {
-    let attempts = 0;
-    while (attempts < 2) {
+    const MAX_ATTEMPTS = 2;
+
+    for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
         const controller = new AbortController();
         const timeout = setTimeout(() => controller.abort(), timeoutMs);
+        let rawOutput;
         try {
             const response = await fetch(apiUrl, {
                 method: 'POST',
@@ -96,31 +105,43 @@ async function requestJsonStep({ systemPrompt, userPrompt, model, apiUrl, timeou
                 }),
                 signal: controller.signal
             });
-            clearTimeout(timeout);
 
             if (!response.ok) {
                 const errText = await response.text();
-                throw new Error(`${label} API Hatası: ${errText}`);
+                throw new Error(`${label} API Hatası (HTTP ${response.status}): ${errText.slice(0, 300)}`);
             }
 
             const data = await response.json();
-            const rawOutput = cleanModelOutput(data.message.content);
-
-            try {
-                const stepJson = JSON.parse(rawOutput);
-                if (!stepJson.action) throw new Error("JSON'da action alanı yok.");
-                return stepJson;
-            } catch (parseErr) {
-                attempts += 1;
-                logInfo('⚠️', `${label} JSON formatını bozdu. Tekrar deneniyor...`);
-                if (attempts >= 2) throw new Error(`${label} geçerli JSON üretemedi: ${rawOutput}`);
-            }
+            // ⚠️ DÜZELTME: Ollama'nın hata gövdesi artık JSON parse denemesinden ÖNCE
+            // yakalanıyor. Bu tür hatalar tekrar denemeyle düzelmez, o yüzden fırlatılır.
+            rawOutput = cleanModelOutput(extractMessageContent(data, label));
         } catch (err) {
-            clearTimeout(timeout);
-            if (err.name === 'AbortError') throw new Error(`${label} timeout yedi.`);
+            if (err.name === 'AbortError') throw new Error(`${label} timeout yedi (${timeoutMs / 1000} sn).`);
             throw err;
+        } finally {
+            clearTimeout(timeout);
+        }
+
+        // Buradan sonrası SADECE model çıktısının biçim hatası — tekrar denemeye değer.
+        try {
+            const stepJson = JSON.parse(rawOutput);
+            if (!stepJson || typeof stepJson !== 'object' || Array.isArray(stepJson)) {
+                throw new Error('Yanıt tek bir JSON nesnesi değil.');
+            }
+            if (typeof stepJson.action !== 'string' || !stepJson.action.trim()) {
+                throw new Error("JSON'da geçerli bir action alanı yok.");
+            }
+            return stepJson;
+        } catch (parseErr) {
+            if (attempt >= MAX_ATTEMPTS) {
+                throw new Error(`${label} geçerli JSON üretemedi (${parseErr.message}): ${rawOutput.slice(0, 300)}`);
+            }
+            logInfo('⚠️', `${label} JSON formatını bozdu. Tekrar deneniyor... (${attempt}/${MAX_ATTEMPTS})`);
         }
     }
+
+    // Döngü buraya asla düşmemeli; yine de sessizce undefined dönmesin.
+    throw new Error(`${label} geçerli bir adım üretemedi.`);
 }
 
 // YENİ MİMARİ: Adım Adım Düşünen Otonom Ajan

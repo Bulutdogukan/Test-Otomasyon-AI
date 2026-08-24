@@ -7,6 +7,7 @@ const { agentPlanTest, agentGetNextStep, agentHealStep } = require('../services/
 const { compilePlaywrightCode } = require('../services/compiler.service');
 const { selectRelevantElements } = require('../services/dom.ranker');
 const { stageSpecFile } = require('../utils/staging');
+const { escapeRegExp, normalizeAction, normalizeAssertType, validateAssert } = require('../utils/steps');
 
 const OLLAMA_MODEL = process.env.OLLAMA_MODEL || "qwen2.5-coder:7b";
 const OLLAMA_URL = process.env.OLLAMA_URL || "http://127.0.0.1:11434/api/chat";
@@ -14,11 +15,9 @@ const OLLAMA_URL = process.env.OLLAMA_URL || "http://127.0.0.1:11434/api/chat";
 const MAX_DOM_ELEMENTS = parseInt(process.env.MAX_DOM_ELEMENTS, 10) || 60;
 // FAZ 3: Self-Healing azami kurtarma turu (her tur: DOM yeniden tara + LLM'den alternatif iste)
 const MAX_HEAL_ATTEMPTS = parseInt(process.env.MAX_HEAL_ATTEMPTS, 10) || 2;
+// Keşif döngüsünün azami adım sayısı (sonsuz döngü koruması)
+const MAX_DISCOVERY_LOOPS = parseInt(process.env.MAX_DISCOVERY_LOOPS, 10) || 15;
 
-// URL assertion'ı için metni güvenli regex'e çevirir.
-function escapeRegExp(s) {
-    return String(s).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-}
 const PROJECT_ROOT = path.join(__dirname, '../../');
 const TESTS_DIR = path.join(PROJECT_ROOT, 'tests');
 
@@ -142,7 +141,11 @@ async function executeAutonomousFlow(url, userPrompt, useGrid = false, outputDir
         const slug = slugify(testPlan);
         const featurePath = path.join(featuresDir, `${slug}.feature`);
         const specPath = path.join(specsDir, `${slug}.spec.ts`);
-        fs.writeFileSync(featurePath, testPlan);
+        // ⚠️ DÜZELTME: .feature dosyası ARTIK BURADA YAZILMIYOR.
+        // Önceden plan üretilir üretilmez diske yazılıyordu; keşif/derleme yarıda
+        // kalırsa (hata, timeout, self-healing tükenmesi) kalıcı kütüphanede
+        // karşılığı olmayan "yetim" .feature dosyaları birikiyordu. Artık ikili
+        // (feature + spec) yalnızca keşif gerçekten adım ürettiğinde BİRLİKTE yazılır.
 
         // 2. KEŞİF (EXPLORATION) AŞAMASI
         let browser;
@@ -156,8 +159,12 @@ async function executeAutonomousFlow(url, userPrompt, useGrid = false, outputDir
             logInfo('☁️', `Selenium Grid'e bağlanılıyor... Adres: ${gridEndpoint}`);
             browser = await chromium.connect({ wsEndpoint: gridEndpoint });
         } else {
-            logInfo('🕵️', `Lokal AI Keşif Modu Başlatılıyor... Tarayıcı bağlanıyor.`);
-            browser = await chromium.launch({ headless: false, args: ['--start-maximized'] });
+            // Keşif normalde GÖRÜNÜR tarayıcıda koşar (kullanıcı ne olduğunu izleyebilsin).
+            // Ekransız ortamlarda (SSH ile bağlanılan Mac Mini, CI, Docker) görünür mod
+            // hiç açılamaz; bu yüzden .env'deki HEADLESS=true ile kapatılabilir.
+            const headless = String(process.env.HEADLESS || '').toLowerCase() === 'true';
+            logInfo('🕵️', `Lokal AI Keşif Modu Başlatılıyor... (${headless ? 'headless' : 'görünür tarayıcı'})`);
+            browser = await chromium.launch({ headless, args: ['--start-maximized'] });
         }
         
         const context = await browser.newContext({ viewport: null });
@@ -170,7 +177,10 @@ async function executeAutonomousFlow(url, userPrompt, useGrid = false, outputDir
                 await newPage.waitForLoadState('domcontentloaded', { timeout: 10000 });
                 activePage = newPage; // Otonom şef artık yeni sayfayı yönetecek
             } catch(e) {
-                logError(`Yeni sekme yüklenirken süre aşımı oluştu.`);
+                // ⚠️ DÜZELTME: Timeout olsa bile yeni sekmeye geçiyoruz; aksi halde
+                // ajan açılmamış sayfada işlem yapmaya devam eder.
+                logError(`Yeni sekme yüklenirken süre aşımı oluştu — yine de yeni sekmeye geçiliyor.`);
+                activePage = newPage;
             }
         });
 
@@ -178,9 +188,11 @@ async function executeAutonomousFlow(url, userPrompt, useGrid = false, outputDir
 
         let isDone = false;
         let loopCount = 0;
-        const maxLoops = 15;
+        const maxLoops = MAX_DISCOVERY_LOOPS;
         let lastActionKey = null;
         let repeatCount = 0;
+        // Model üst üste anlamsız eylem adı üretirse döngü boşa dönmesin.
+        let invalidActionCount = 0;
 
         while (!isDone && loopCount < maxLoops) {
             logInfo('🔍', `[Adım ${loopCount + 1}] Canlı Ekran DOM Haritası Çıkarılıyor...`);
@@ -198,25 +210,42 @@ async function executeAutonomousFlow(url, userPrompt, useGrid = false, outputDir
             logInfo('🧠', `Agent 2 (Locator) hedefe ulaşmak için Düşünüyor...`);
             const nextStep = await agentGetNextStep(testPlan, domData, stepHistory, activeModel, OLLAMA_URL);
             
-            if (nextStep.action === 'DONE' || nextStep.action === 'done' || nextStep.action === 'BİTTİ') {
+            // ⚠️ DÜZELTME: Eylem adı artık tek noktadan normalize ediliyor.
+            // Önceden "Click"/"CLICK"/"drag_and_drop" gibi biçimler tanınmıyor,
+            // doğrudan "Bilinmeyen eylem tipi" hatasına düşüyordu.
+            const action = normalizeAction(nextStep.action);
+
+            if (action === 'DONE') {
                 logSuccess('✅', 'AI: Senaryo hedefine ulaşıldı!');
                 break;
             }
+
+            if (!action) {
+                invalidActionCount++;
+                logWarning(`Model tanınmayan bir eylem üretti: ${JSON.stringify(nextStep.action)}. Atlanıyor.`);
+                if (invalidActionCount >= 3) {
+                    logError('Model üst üste geçerli bir eylem üretemedi. Keşif durduruluyor.');
+                    break;
+                }
+                loopCount++;
+                continue;
+            }
+            invalidActionCount = 0;
 
             // Otonom Çevirici: AI Label verirse CSS'e çevirir
             let safeLocator = domMap[nextStep.locator] ? domMap[nextStep.locator] : nextStep.locator;
             // FAZ 3.2: dragAndDrop hedef locator'ı da label->CSS çevrilir.
             let safeTarget = nextStep.target ? (domMap[nextStep.target] || nextStep.target) : undefined;
-            logInfo('🎯', `Eylem Uygulanıyor: [${nextStep.action.toUpperCase()}] -> ${safeLocator}`);
+            logInfo('🎯', `Eylem Uygulanıyor: [${action.toUpperCase()}] -> ${safeLocator}`);
 
             // İlerleme kontrolü: aynı (aksiyon+locator) art arda tekrar ediyorsa
-            // sayfa hiç değişmiyor demektir — 15 adım boyunca beklemeden hemen dur.
-            const actionKey = `${nextStep.action}:${safeLocator}`;
+            // sayfa hiç değişmiyor demektir — tüm adım bütçesini harcamadan hemen dur.
+            const actionKey = `${action}:${safeLocator}`;
             if (actionKey === lastActionKey) {
                 repeatCount++;
                 // Aynı assert'in tekrarı = model DONE diyemiyor ama hedef doğrulandı.
                 // 2. kez YÜRÜTMEDEN başarıyla bitir (gereksiz LLM turu + çift assert önlenir).
-                if (nextStep.action === 'assert') {
+                if (action === 'assert') {
                     logSuccess('✅', 'Doğrulama zaten yapıldı; hedefe ulaşıldı kabul ediliyor (DONE).');
                     break;
                 }
@@ -232,9 +261,20 @@ async function executeAutonomousFlow(url, userPrompt, useGrid = false, outputDir
             // ⚡ FAZ 2: ASSERTION (Doğrulama) — locator hatasından farklı ele alınır.
             // Canlı doğrulanır; sonuç ne olursa olsun teste kaydedilir (gerçek bir hata ise
             // derlenen testin de patlaması GEREKİR). Başarısız assert döngüyü kırmaz.
-            if (nextStep.action === 'assert') {
-                const assertType = nextStep.assertType || 'visible';
+            if (action === 'assert') {
+                const assertType = normalizeAssertType(nextStep.assertType);
                 const expected = nextStep.expected != null ? nextStep.expected : (nextStep.value || '');
+
+                // ⚠️ DÜZELTME: Beklenen değeri boş gelen url/text doğrulaması SESSİZ
+                // YANLIŞ-POZİTİFTİR (new RegExp('') her URL'yi, toContainText('') her
+                // metni eşler). Böyle bir "doğrulama" teste hiç yazılmamalı.
+                const assertProblem = validateAssert(assertType, expected, safeLocator);
+                if (assertProblem) {
+                    logWarning(`Doğrulama ATLANDI — ${assertProblem}. Teste yazılmayacak (yanlış-pozitif önlendi).`);
+                    loopCount++;
+                    continue;
+                }
+
                 try {
                     if (assertType === 'url') {
                         await expect(activePage).toHaveURL(new RegExp(escapeRegExp(expected)), { timeout: 8000 });
@@ -257,13 +297,21 @@ async function executeAutonomousFlow(url, userPrompt, useGrid = false, outputDir
 
             // FAZ 3: Değer çözümleme (RANDOM_EMAIL -> benzersiz e-posta) tek yerde.
             let resolvedValue = nextStep.value;
-            if (nextStep.action === 'fill' && nextStep.value === 'RANDOM_EMAIL') {
+            if (action === 'fill' && nextStep.value === 'RANDOM_EMAIL') {
                 resolvedValue = `test_${Date.now()}@mail.com`;
             }
             nextStep.value = resolvedValue;
 
+            // dragAndDrop hedefsiz gelirse Playwright çağrısı anlamsız bir hata verir;
+            // niyeti baştan reddedip self-healing turunu boşa harcamıyoruz.
+            if (action === 'dragAndDrop' && !safeTarget) {
+                logWarning('dragAndDrop için "target" verilmedi, adım atlanıyor.');
+                loopCount++;
+                continue;
+            }
+
             try {
-                await executeAction(activePage, nextStep.action, safeLocator, resolvedValue, { target: safeTarget });
+                await executeAction(activePage, action, safeLocator, resolvedValue, { target: safeTarget });
             } catch (err) {
                 // ⚡ FAZ 3: GERÇEK SELF-HEALING (sabit text-fallback yerine adaptif kurtarma).
                 // DOM YENİDEN taranır, LLM'den aynı niyete uyan alternatif locator istenir,
@@ -280,13 +328,15 @@ async function executeAutonomousFlow(url, userPrompt, useGrid = false, outputDir
                         const freshRanked = selectRelevantElements(freshMap, testPlan, stepHistory, MAX_DOM_ELEMENTS);
                         const healedStep = await agentHealStep(
                             testPlan,
-                            { action: nextStep.action, locator: safeLocator, value: resolvedValue },
+                            { action, locator: safeLocator, value: resolvedValue },
                             reason,
                             JSON.stringify(freshRanked, null, 2),
                             activeModel, OLLAMA_URL
                         );
 
-                        if (!healedStep || healedStep.action === 'GIVEUP') {
+                        // GIVEUP / DONE de aynı normalizasyondan geçer ("Give up", "vazgeç" ...).
+                        const healedAction = healedStep ? normalizeAction(healedStep.action) : null;
+                        if (!healedStep || healedAction === 'GIVEUP' || healedAction === 'DONE') {
                             logWarning(`Self-Healing: bu ekranda uygun alternatif bulunamadı.`);
                             break;
                         }
@@ -303,7 +353,7 @@ async function executeAutonomousFlow(url, userPrompt, useGrid = false, outputDir
                         const healedTarget = (healedStep.target != null) ? (freshMap[healedStep.target] || healedStep.target) : safeTarget;
                         logInfo('🩹', `Self-Healing denemesi ${healAttempt}: yeni locator -> ${healedLocator}`);
 
-                        await executeAction(activePage, nextStep.action, healedLocator, healedValue, { target: healedTarget });
+                        await executeAction(activePage, action, healedLocator, healedValue, { target: healedTarget });
 
                         // Başarılı: ÇALIŞAN locator/değer kaydedilir (derlenen test doğru olanı alır).
                         safeLocator = healedLocator;
@@ -322,7 +372,7 @@ async function executeAutonomousFlow(url, userPrompt, useGrid = false, outputDir
                 }
             }
 
-            stepHistory.push({ action: nextStep.action, locator: safeLocator, value: nextStep.value, target: safeTarget });
+            stepHistory.push({ action, locator: safeLocator, value: nextStep.value, target: safeTarget });
             loopCount++;
             
             // Sayfanın kendine gelmesi ve yeni elementlerin oturması için bekleme süresi
@@ -341,8 +391,19 @@ async function executeAutonomousFlow(url, userPrompt, useGrid = false, outputDir
         }
 
         // 3. DERLEME (COMPILATION) AŞAMASI
-        logInfo('🧹', 'Keşif tamamlandı. Hızlı ve Kalıcı Test Senaryosu derleniyor...');
+        // ⚠️ DÜZELTME: Keşif hiç adım üretemediyse kalıcı kütüphaneye HİÇBİR ŞEY
+        // yazılmaz. Aksi halde sadece page.goto() içeren, hiçbir şey doğrulamayan
+        // "boş" bir spec (ve eşi olmayan bir .feature) git ile iki makineye yayılırdı.
+        if (stepHistory.length === 0) {
+            throw new Error('Keşif hiçbir uygulanabilir adım üretemedi; kalıcı test kütüphanesine kayıt yapılmadı. ' +
+                'Hedef URL, senaryo metni ve Ollama modelini kontrol edip tekrar deneyin.');
+        }
+
+        logInfo('🧹', `Keşif tamamlandı (${stepHistory.length} adım). Kalıcı test senaryosu derleniyor...`);
+        // Feature ve spec BİRLİKTE yazılır: kütüphanede daima eşleşen ikili bulunur.
+        fs.writeFileSync(featurePath, testPlan);
         compilePlaywrightCode(stepHistory, url, testPlan, specPath);
+        logSuccess('📚', `Kalıcı kütüphaneye eklendi: ${path.basename(specPath)}`);
 
         // 4. TEST KOŞUSU VE RAPORLAMA
         logInfo('⚙️', `Playwright Statik Test Runner Başlatılıyor...`);
@@ -372,7 +433,11 @@ async function executeAutonomousFlow(url, userPrompt, useGrid = false, outputDir
 
             testProcess.on('close', (code) => {
                 logInfo('📊', `Allure raporu derleniyor...`);
-                const allureProcess = spawn(npxCmd, ['allure', 'generate', './allure-results', '-o', './allure-report', '--clean'], { shell: true });
+                // ⚠️ DÜZELTME: cwd eklendi — göreli './allure-results' yolu, süreç
+                // farklı bir çalışma dizininden başlatıldığında yanlış klasöre bakıyordu.
+                const allureProcess = spawn(npxCmd, ['allure', 'generate', './allure-results', '-o', './allure-report', '--clean'], {
+                    shell: true, cwd: PROJECT_ROOT
+                });
 
                 // ⚠️ DÜZELTME: Allure başlatılamazsa AKIŞ ÇÖKMEZ; testin gerçek sonucu
                 // raporlama hatasıyla maskelenmemeli, test exit kodu yine de döndürülür.

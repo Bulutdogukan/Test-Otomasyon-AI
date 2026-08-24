@@ -9,7 +9,7 @@
         * { box-sizing: border-box; margin: 0; padding: 0; }
         body { background-color: #0b0f19; color: #d1d5db; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; height: 100vh; overflow: hidden; display: flex; flex-direction: column; }
         .app-container { display: flex; flex-direction: column; height: 100%; width: 100%; }
-        
+
         /* Sol Menü */
         .sidebar { background-color: #111827; padding: 25px; display: flex; flex-direction: column; overflow-y: auto; border-bottom: 1px solid #1f2937; }
         .header { margin-bottom: 25px; }
@@ -19,13 +19,13 @@
         /* Form ve Inputlar */
         .input-group { margin-bottom: 15px; }
         label { display: block; font-size: 13px; font-weight: 500; color: #9ca3af; margin-bottom: 6px; }
-        input[type="text"], textarea, select { width: 100%; background: #0b0f19; border: 1px solid #374151; color: #e5e7eb; padding: 10px 12px; border-radius: 6px; font-size: 14px; transition: border 0.2s; font-family: inherit; }
+        input[type="text"], input[type="password"], textarea, select { width: 100%; background: #0b0f19; border: 1px solid #374151; color: #e5e7eb; padding: 10px 12px; border-radius: 6px; font-size: 14px; transition: border 0.2s; font-family: inherit; }
         select:focus { outline: none; border-color: #facc15; }
-        
+
         /* İstediğin Ok Kaldırma Düzenlemesi */
-        textarea { resize: none; } 
-        
-        input[type="text"]:focus, textarea:focus { outline: none; border-color: #facc15; }
+        textarea { resize: none; }
+
+        input[type="text"]:focus, input[type="password"]:focus, textarea:focus { outline: none; border-color: #facc15; }
 
         /* Sürükle-Bırak */
         .dropzone { border: 1.5px dashed #4b5563; border-radius: 6px; padding: 20px; text-align: center; background: #1f2937; cursor: pointer; transition: all 0.2s; margin-bottom: 15px; font-size: 13px; color: #9ca3af; }
@@ -52,22 +52,37 @@
 
         /* Sağ Alan (Loglar & Kodlar) */
         .main-content { flex: 1; display: flex; flex-direction: column; background: #0b0f19; overflow: hidden; padding: 15px; gap: 15px; }
-        
+
         .pane { background: #111827; border: 1px solid #1f2937; border-radius: 8px; display: flex; flex-direction: column; overflow: hidden; }
         .terminal-pane { flex: 6; }
-        .code-pane { flex: 4; display: none; } 
+        .code-pane { flex: 4; display: none; }
 
         .pane-header { background: #1f2937; padding: 8px 15px; font-size: 13px; color: #9ca3af; display: flex; justify-content: space-between; align-items: center; }
         .terminal { flex: 1; overflow-y: auto; padding: 15px; font-family: monospace; font-size: 13px; color: #34d399; white-space: pre-wrap; line-height: 1.6; }
-        
+
         /* Tab Yapısı */
         .tabs { display: flex; gap: 5px; }
         .tab { padding: 6px 12px; font-size: 12px; cursor: pointer; border-radius: 4px; background: transparent; color: #9ca3af; }
         .tab.active { background: #374151; color: #facc15; font-weight: 600; }
         .code-block { flex: 1; overflow-y: auto; padding: 15px; font-family: monospace; font-size: 13px; color: #93c5fd; white-space: pre-wrap; background: transparent; }
-        
+
         .btn-download { background: #374151; color: #fff; padding: 4px 10px; font-size: 12px; border-radius: 4px; }
         .btn-download:hover { background: #4b5563; }
+
+        /* 🔐 Giriş ekranı (APP_TOKEN koruması aktifse) */
+        .lock-overlay { position: fixed; inset: 0; background: #0b0f19; display: none; align-items: center; justify-content: center; z-index: 50; padding: 20px; }
+        .lock-overlay.show { display: flex; }
+        .lock-card { background: #111827; border: 1px solid #1f2937; border-radius: 10px; padding: 28px; width: 100%; max-width: 380px; }
+        .lock-card h2 { color: #facc15; font-size: 17px; margin-bottom: 6px; }
+        .lock-card p { color: #6b7280; font-size: 13px; margin-bottom: 18px; line-height: 1.5; }
+        .lock-card .btn-start { width: 100%; margin-top: 14px; }
+        .lock-error { color: #f87171; font-size: 13px; margin-top: 12px; min-height: 18px; }
+        code { background: #0b0f19; padding: 1px 5px; border-radius: 3px; color: #facc15; font-size: 12px; }
+
+        /* Bağlantı durumu rozeti */
+        .conn { font-size: 12px; padding: 2px 8px; border-radius: 10px; }
+        .conn.online { background: #064e3b; color: #6ee7b7; }
+        .conn.offline { background: #4c1d24; color: #fca5a5; }
 
         @media (min-width: 800px) {
             .app-container { flex-direction: row; }
@@ -77,6 +92,16 @@
     </style>
 </head>
 <body>
+
+<div class="lock-overlay" id="lockOverlay">
+    <div class="lock-card">
+        <h2>🔐 Erişim Anahtarı</h2>
+        <p>Bu sunucu <code>APP_TOKEN</code> ile korunuyor. Devam etmek için <code>.env</code> dosyasındaki anahtarı girin.</p>
+        <input type="password" id="tokenInput" placeholder="Erişim anahtarı" autocomplete="current-password">
+        <button class="btn-start" id="tokenBtn">Giriş Yap</button>
+        <div class="lock-error" id="tokenError"></div>
+    </div>
+</div>
 
 <div class="app-container">
     <div class="sidebar">
@@ -137,7 +162,10 @@
         <div class="pane terminal-pane">
             <div class="pane-header">
                 <span>>_ Konsol Logları</span>
-                <span id="status" style="color: #9ca3af;">Bekliyor...</span>
+                <span style="display:flex; align-items:center; gap:10px;">
+                    <span id="connBadge" class="conn offline">bağlanıyor…</span>
+                    <span id="status" style="color: #9ca3af;">Bekliyor...</span>
+                </span>
             </div>
             <div id="terminal" class="terminal">Sistem hazır.</div>
         </div>
@@ -157,20 +185,26 @@
 
 <script src="/socket.io/socket.io.js"></script>
 <script>
-    const socket = io();
+    let socket = null;              // 🔐 Bağlantı ancak yetki doğrulandıktan sonra kurulur
     let codeData = { ts: "", feature: "" };
     let currentTab = "ts";
+    let appToken = '';
 
     const terminal = document.getElementById('terminal');
     const startBtn = document.getElementById('startBtn');
     const reportBtn = document.getElementById('reportBtn');
     const runAllBtn = document.getElementById('runAllBtn');
     const statusSpan = document.getElementById('status');
+    const connBadge = document.getElementById('connBadge');
     const dropzoneText = document.getElementById('dropzoneText');
     const codeContainer = document.getElementById('codeContainer');
     const codeBlock = document.getElementById('codeBlock');
     const outputDirInput = document.getElementById('outputDir');
     const modelSelect = document.getElementById('modelSelect');
+    const lockOverlay = document.getElementById('lockOverlay');
+    const tokenInput = document.getElementById('tokenInput');
+    const tokenBtn = document.getElementById('tokenBtn');
+    const tokenError = document.getElementById('tokenError');
 
     // 📁 Her kullanıcının kendi klasörü tarayıcısında saklanır (çok kullanıcılı izolasyon):
     // aynı makinede farklı kullanıcılar / farklı makineler birbirinin klasörünü görmez.
@@ -179,86 +213,207 @@
         localStorage.setItem('qa_output_dir', outputDirInput.value.trim());
     });
 
-    // 🧠 Model seçimi: sunucudan kurulu Ollama modelleri çekilir, seçim saklanır.
-    socket.emit('get_models');
-    socket.on('models_list', (data) => {
-        const saved = localStorage.getItem('qa_model') || '';
-        modelSelect.innerHTML = '';
-        const defOpt = document.createElement('option');
-        defOpt.value = '';
-        defOpt.textContent = `Varsayılan (${data.current || '.env'})`;
-        modelSelect.appendChild(defOpt);
-        (data.models || []).forEach(name => {
-            const opt = document.createElement('option');
-            opt.value = name;
-            opt.textContent = name;
-            if (name === saved) opt.selected = true;
-            modelSelect.appendChild(opt);
-        });
-    });
     modelSelect.addEventListener('change', () => {
         localStorage.setItem('qa_model', modelSelect.value);
     });
 
-    function selectFolder() {
-        socket.emit('select_folder');
+    // ==================================================================
+    // 🔐 YETKİLENDİRME AKIŞI
+    // Sunucuda APP_TOKEN tanımlıysa önce anahtar doğrulanır; ancak ondan
+    // sonra Socket.io bağlantısı açılır. Anahtar tanımlı değilse ekran hiç
+    // gösterilmez ve davranış eskisiyle birebir aynıdır.
+    // ==================================================================
+    function setConnBadge(online) {
+        connBadge.className = 'conn ' + (online ? 'online' : 'offline');
+        connBadge.textContent = online ? 'bağlı' : 'bağlantı yok';
     }
 
-    socket.on('folder_selected', (data) => {
-        if (data && data.path) {
-            outputDirInput.value = data.path;
-            localStorage.setItem('qa_output_dir', data.path);
-        } else if (data && data.error) {
-            alert(data.error);
+    async function validateToken(token) {
+        // ⚠️ DÜZELTME: GET yerine POST kullanılıyor — token artık URL'de (query
+        // string) görünmüyor; sunucu loglarına ve tarayıcı geçmişine düşmüyor.
+        const res = await fetch('/api/auth', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ token })
+        });
+        if (res.ok) return { ok: true };
+        let message = 'Erişim anahtarı hatalı.';
+        try {
+            const body = await res.json();
+            if (body && body.error) message = body.error;
+        } catch (e) { /* gövde JSON değilse varsayılan mesaj kalır */ }
+        return { ok: false, message };
+    }
+
+    async function boot() {
+        let authRequired = false;
+        try {
+            const cfg = await fetch('/api/config').then(r => r.json());
+            authRequired = !!cfg.authRequired;
+        } catch (e) {
+            terminal.insertAdjacentText('beforeend', '\n❌ Sunucuya ulaşılamıyor. Sunucunun çalıştığından emin olun.\n');
+            return;
         }
-        // data.cancelled -> kullanıcı vazgeçti, sessizce geç
-    });
 
-    // Socket Eventleri (Merkezi Konum)
-    socket.on('log', (msg) => {
-        // 🔒 Güvenlik: log içeriği hedef siteden/AI'dan gelir. innerHTML yerine metin olarak
-        // eklenir; aksi halde element metnindeki <script>/<img onerror> gibi içerik XSS'e yol açardı.
-        terminal.insertAdjacentText('beforeend', msg.replace(/\x1b\[[0-9;]*m/g, ''));
-        terminal.scrollTop = terminal.scrollHeight;
-    });
+        if (!authRequired) {
+            connect();
+            return;
+        }
 
-    socket.on('test_finished', () => {
-        startBtn.disabled = false; startBtn.innerHTML = "▶ Yeni Test";
-        runAllBtn.disabled = false;
-        reportBtn.style.display = "block";
-        statusSpan.style.color = "#34d399"; statusSpan.innerText = "Tamamlandı";
-    });
+        // Daha önce girilmiş anahtar varsa sessizce denenir.
+        const saved = localStorage.getItem('qa_app_token') || '';
+        if (saved) {
+            const result = await validateToken(saved);
+            if (result.ok) {
+                appToken = saved;
+                connect();
+                return;
+            }
+            localStorage.removeItem('qa_app_token');
+        }
+        showLock();
+    }
 
-    socket.on('all_tests_finished', () => {
-        runAllBtn.disabled = false; runAllBtn.innerHTML = "▶▶ Tüm Testleri Paralel Çalıştır";
-        startBtn.disabled = false;
-        reportBtn.style.display = "block";
-        statusSpan.style.color = "#34d399"; statusSpan.innerText = "Tamamlandı";
-    });
+    function showLock(message) {
+        lockOverlay.classList.add('show');
+        tokenError.textContent = message || '';
+        tokenInput.focus();
+    }
 
-    socket.on('test_code', (data) => {
-        codeData = data;
-        codeContainer.style.display = "flex"; 
-        switchTab('ts'); 
-    });
+    async function submitToken() {
+        const token = tokenInput.value.trim();
+        if (!token) { tokenError.textContent = 'Lütfen anahtarı girin.'; return; }
+        tokenBtn.disabled = true;
+        tokenError.textContent = 'Kontrol ediliyor...';
+        const result = await validateToken(token);
+        tokenBtn.disabled = false;
+        if (!result.ok) {
+            tokenError.textContent = result.message;
+            return;
+        }
+        appToken = token;
+        localStorage.setItem('qa_app_token', token);
+        lockOverlay.classList.remove('show');
+        tokenInput.value = '';
+        connect();
+    }
 
-    socket.on('redirect_to_report', () => {
-        window.open('/allure/index.html?t=' + Date.now(), '_blank');
-    });
+    tokenBtn.addEventListener('click', submitToken);
+    tokenInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') submitToken(); });
+
+    function connect() {
+        socket = io({ auth: { token: appToken } });
+        registerSocketHandlers();
+    }
+
+    function registerSocketHandlers() {
+        socket.on('connect', () => {
+            setConnBadge(true);
+            socket.emit('get_models');
+        });
+
+        socket.on('disconnect', () => setConnBadge(false));
+
+        socket.on('connect_error', (err) => {
+            setConnBadge(false);
+            // Sunucu yetkisiz bağlantıyı el sıkışmada reddeder.
+            if (err && /unauthorized/i.test(err.message || '')) {
+                localStorage.removeItem('qa_app_token');
+                appToken = '';
+                socket.close();
+                showLock('Oturum geçersiz. Lütfen anahtarı tekrar girin.');
+            }
+        });
+
+        // 🧠 Model seçimi: sunucudan kurulu Ollama modelleri çekilir, seçim saklanır.
+        socket.on('models_list', (data) => {
+            const saved = localStorage.getItem('qa_model') || '';
+            modelSelect.innerHTML = '';
+            const defOpt = document.createElement('option');
+            defOpt.value = '';
+            defOpt.textContent = `Varsayılan (${data.current || '.env'})`;
+            modelSelect.appendChild(defOpt);
+            (data.models || []).forEach(name => {
+                const opt = document.createElement('option');
+                opt.value = name;
+                opt.textContent = name;
+                if (name === saved) opt.selected = true;
+                modelSelect.appendChild(opt);
+            });
+            if (data.error) {
+                terminal.insertAdjacentText('beforeend', `\n⚠️ ${data.error}\n`);
+            }
+        });
+
+        socket.on('folder_selected', (data) => {
+            if (data && data.path) {
+                outputDirInput.value = data.path;
+                localStorage.setItem('qa_output_dir', data.path);
+            } else if (data && data.error) {
+                alert(data.error);
+            }
+            // data.cancelled -> kullanıcı vazgeçti, sessizce geç
+        });
+
+        socket.on('log', (msg) => {
+            // 🔒 Güvenlik: log içeriği hedef siteden/AI'dan gelir. innerHTML yerine metin olarak
+            // eklenir; aksi halde element metnindeki <script>/<img onerror> gibi içerik XSS'e yol açardı.
+            terminal.insertAdjacentText('beforeend', msg.replace(/\x1b\[[0-9;]*m/g, ''));
+            terminal.scrollTop = terminal.scrollHeight;
+        });
+
+        socket.on('test_finished', () => {
+            startBtn.disabled = false; startBtn.textContent = "▶ Yeni Test";
+            runAllBtn.disabled = false; runAllBtn.textContent = "▶▶ Tüm Testleri Paralel Çalıştır";
+            reportBtn.style.display = "block";
+            statusSpan.style.color = "#34d399"; statusSpan.textContent = "Tamamlandı";
+        });
+
+        socket.on('all_tests_finished', () => {
+            runAllBtn.disabled = false; runAllBtn.textContent = "▶▶ Tüm Testleri Paralel Çalıştır";
+            startBtn.disabled = false; startBtn.textContent = "▶ Yeni Test";
+            reportBtn.style.display = "block";
+            statusSpan.style.color = "#34d399"; statusSpan.textContent = "Tamamlandı";
+        });
+
+        socket.on('test_code', (data) => {
+            codeData = data;
+            codeContainer.style.display = "flex";
+            switchTab('ts');
+        });
+
+        socket.on('redirect_to_report', () => {
+            window.open('/allure/index.html?t=' + Date.now(), '_blank');
+        });
+    }
+
+    // Sunucuya bir şey göndermeden önce bağlantının kurulduğundan emin ol.
+    function emitOrWarn(event, payload) {
+        if (!socket || !socket.connected) {
+            alert('Sunucuyla bağlantı yok. Sayfayı yenileyip tekrar deneyin.');
+            return false;
+        }
+        socket.emit(event, payload);
+        return true;
+    }
+
+    function selectFolder() {
+        emitOrWarn('select_folder');
+    }
 
     // Sekme Yönetimi
     function switchTab(tab) {
         currentTab = tab;
         document.getElementById('tabTs').classList.remove('active');
         document.getElementById('tabFeature').classList.remove('active');
-        
+
         if (tab === 'ts') {
             document.getElementById('tabTs').classList.add('active');
-            codeBlock.style.color = '#93c5fd'; 
+            codeBlock.style.color = '#93c5fd';
             codeBlock.innerText = codeData.ts;
         } else {
             document.getElementById('tabFeature').classList.add('active');
-            codeBlock.style.color = '#fde047'; 
+            codeBlock.style.color = '#fde047';
             codeBlock.innerText = codeData.feature;
         }
     }
@@ -290,33 +445,43 @@
     async function handleFileUpload() {
         if (!fileInput.files[0]) return;
         const file = fileInput.files[0];
-        dropzoneText.innerText = `⏳ Okunuyor: ${file.name}`;
+        dropzoneText.textContent = `⏳ Okunuyor: ${file.name}`;
         const formData = new FormData(); formData.append('scenarioFile', file);
 
         try {
-            const response = await fetch('/upload', { method: 'POST', body: formData });
+            // 🔐 Koruma açıksa anahtar başlıkla da gönderilir (cookie'ye ek güvence).
+            const headers = appToken ? { 'x-app-token': appToken } : {};
+            const response = await fetch('/upload', { method: 'POST', body: formData, headers });
             const data = await response.json();
-            if(data.content) {
-                document.getElementById('prompt').value = data.content;
-                dropzoneText.innerText = `✅ Yüklendi: ${file.name}`;
-                if(document.getElementById('url').value) startTest();
+            if (!response.ok) {
+                // ⚠️ DÜZELTME: Sunucu 400/401/500 dönerse önceden sessizce yutuluyordu.
+                dropzoneText.textContent = `❌ ${data.error || 'Dosya yüklenemedi'}`;
+                return;
             }
-        } catch(err) { dropzoneText.innerText = `❌ Hata`; }
+            if (data.content) {
+                document.getElementById('prompt').value = data.content;
+                dropzoneText.textContent = `✅ Yüklendi: ${file.name}`;
+                if (document.getElementById('url').value) startTest();
+            }
+        } catch (err) {
+            dropzoneText.textContent = `❌ Yükleme hatası: ${err.message}`;
+        }
+    }
+
+    function beginRun(statusText) {
+        terminal.textContent = ""; codeContainer.style.display = "none";
+        reportBtn.style.display = "none";
+        statusSpan.style.color = "#facc15"; statusSpan.textContent = statusText;
     }
 
     function startTest() {
-        const url = document.getElementById('url').value;
-        const prompt = document.getElementById('prompt').value;
-        if(!url || !prompt) { alert("Lütfen URL ve Senaryo girin."); return; }
+        const url = document.getElementById('url').value.trim();
+        const prompt = document.getElementById('prompt').value.trim();
+        if (!url || !prompt) { alert("Lütfen URL ve Senaryo girin."); return; }
 
-        terminal.innerHTML = ""; codeContainer.style.display = "none";
-        startBtn.disabled = true; startBtn.innerHTML = "⏳ Test Ediliyor...";
-        runAllBtn.disabled = true;
-        reportBtn.style.display = "none";
-        statusSpan.style.color = "#facc15"; statusSpan.innerText = "Yürütülüyor...";
-
-        // YENİ: useGrid + kayıt klasörü + model seçimi backend'e gönderiliyor
-        socket.emit('start_test', {
+        // Butonlar YALNIZCA istek gerçekten gönderildiyse kilitlenir; bağlantı
+        // yoksa arayüz kalıcı "Test Ediliyor..." durumunda takılı kalmaz.
+        const sent = emitOrWarn('start_test', {
             url,
             prompt,
             video: document.getElementById('video').checked,
@@ -325,23 +490,31 @@
             outputDir: outputDirInput.value.trim(),
             model: modelSelect.value
         });
+        if (!sent) return;
+
+        beginRun("Yürütülüyor...");
+        startBtn.disabled = true; startBtn.textContent = "⏳ Test Ediliyor...";
+        runAllBtn.disabled = true;
     }
 
-    function openReport() { socket.emit('open_report'); }
+    function openReport() { emitOrWarn('open_report'); }
 
     function runAllTests() {
-        terminal.innerHTML = ""; codeContainer.style.display = "none";
-        runAllBtn.disabled = true; runAllBtn.innerHTML = "⏳ Paralel Koşuluyor...";
-        startBtn.disabled = true;
-        reportBtn.style.display = "none";
-        statusSpan.style.color = "#facc15"; statusSpan.innerText = "Yürütülüyor...";
         // Seçili klasördeki TÜM testler paralel koşulur (boşsa varsayılan klasör).
         // Grid işaretliyse toplu koşum da uzak tarayıcılardan geçer.
-        socket.emit('run_all_tests', {
+        const sent = emitOrWarn('run_all_tests', {
             folder: outputDirInput.value.trim(),
             useGrid: document.getElementById('useGrid').checked
         });
+        if (!sent) return;
+
+        beginRun("Yürütülüyor...");
+        runAllBtn.disabled = true; runAllBtn.textContent = "⏳ Paralel Koşuluyor...";
+        startBtn.disabled = true;
     }
+
+    // Tüm tanımlar hazır olduktan sonra yetki kontrolü + bağlantı başlatılır.
+    boot();
 </script>
 </body>
 </html>

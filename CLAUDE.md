@@ -129,15 +129,16 @@ bağlanılan Mac Mini, Docker, CI) `.env` dosyasına `HEADLESS=true` ekle.
 Grid: `chromium.connect` **Playwright protokolü** ister. Vanilla Selenium Grid 4 uymaz —
 `npx playwright run-server` veya Aerokube Moon kullan.
 
-CI (`.github/workflows/ci.yml`) yalnızca tip kontrolü + sözdizimi kapısıdır. Gerçek test
-koşumu bilinçli olarak CI'da yapılmaz: canlı Ollama ve gerçek hedef sitelere erişim gerekir.
+CI (`.github/workflows/ci.yml`) yalnızca tip kontrolü (`tsc --noEmit`) + sözdizimi
+kapısıdır (`node --check`). Gerçek test koşumu bilinçli olarak CI'da yapılmaz: canlı
+Ollama ve gerçek hedef sitelere erişim gerekir.
+
+Docker: `Dockerfile` ve `docker-compose.yml` ile konteyner ortamında çalıştırılabilir.
+`docker compose up` Ollama ve QA sunucusunu birlikte ayağa kaldırır.
 
 ---
 
 ## Bilinen Açık Maddeler
 
-- `tests/generated/features/2026-07-08T11-23-03-923Z_feature-kullanici-login-ekranina-giris-yapma.feature`
-  eski koddan kalma **yetim** bir dosya (eşi olan `.spec.ts` yok). Silinebilir.
-- 22 Temmuz 2026 tarihli 4 üretilmiş test dosyası henüz commit edilmemiş olabilir.
 - `linkedin-gorseller/` klasörü proje dışı içerik; git'e eklenmemeli.
-- Gelecek planları: çoklu LLM desteği, Selenium fallback, Docker/K8s, AI destekli hata analizi.
+- Gelecek planları: çoklu LLM desteği, Selenium fallback, AI destekli hata analizi.

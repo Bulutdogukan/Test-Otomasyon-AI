@@ -66,8 +66,8 @@ ollama run qwen2.5-coder:7b
 ## 1. Repository'yi Klonlayın
 
 ```bash
-git clone <repo-url>
-cd <repo-folder>
+git clone https://github.com/Bulutdogukan/Test-Otomasyon-AI.git
+cd Test-Otomasyon-AI
 ```
 
 ## 2. Bağımlılıkları Kurun
@@ -194,8 +194,8 @@ Proje, tek makineyle sınırlı değildir; kod ve `tests/generated/` altındaki 
 ## Kurulum (ikinci makinede, örn. Mac Mini)
 
 ```bash
-git clone <repo-url>
-cd <repo-folder>
+git clone https://github.com/Bulutdogukan/Test-Otomasyon-AI.git
+cd Test-Otomasyon-AI
 npm install
 npx playwright install --with-deps
 cp .env.example .env   # ardından .env dosyasını doldurun
@@ -345,8 +345,9 @@ npm run typecheck      # TypeScript tip kontrolü (tsc --noEmit)
 ```
 
 `.github/workflows/ci.yml`, her push ve pull request'te bağımlılıkları kurup tip
-kontrolü ile Node sözdizimi kontrolünü çalıştırır. Gerçek test koşumu CI'da bilinçli
-olarak yapılmaz — testler canlı bir Ollama örneği ve gerçek hedef sitelere erişim ister.
+kontrolü (`tsc --noEmit`) ile Node sözdizimi kontrolünü (`node --check`) çalıştırır.
+Gerçek test koşumu CI'da bilinçli olarak yapılmaz — testler canlı bir Ollama örneği
+ve gerçek hedef sitelere erişim ister.
 
 ---
 

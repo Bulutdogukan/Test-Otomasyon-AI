@@ -48,7 +48,17 @@ app.use(helmet({ contentSecurityPolicy: false, crossOriginEmbedderPolicy: false 
 const server = http.createServer(app);
 // ⚠️ DÜZELTME: Uzun keşif+self-healing döngüleri dakikalar sürebilir.
 // Varsayılan Socket.io ping timeout (~20sn) bu sürede bağlantıyı koparıyordu.
-const io = new Server(server, { pingTimeout: 120000, pingInterval: 30000 });
+const io = new Server(server, {
+    pingTimeout: 120000,
+    pingInterval: 30000,
+    // 🔒 CORS: Yalnızca kendi arayüzümüzden gelen bağlantılara izin verilir.
+    // Varsayılan "*" tüm origin'lere açıktı; aynı ağdaki başka bir web sayfası
+    // tarayıcı üzerinden WebSocket bağlantısı kurabilirdi.
+    cors: {
+        origin: `http://localhost:${process.env.PORT || 3000}`,
+        credentials: true
+    }
+});
 
 // ==========================================================================
 // 🔐 ERİŞİM KORUMASI (APP_TOKEN)
@@ -221,28 +231,31 @@ app.post('/api/auth', (req, res) => {
 
 app.use('/allure', requireAuth, express.static(path.join(__dirname, 'allure-report')));
 
-// Console logları arayüze basmak için process çıktısını hookluyoruz (Geçici yönlendirme)
+// Console logları arayüze basmak için process çıktısını hookluyoruz.
+// ⚠️ DÜZELTME: Önceden yalnızca stdout hooklanıyordu. logger.logError() ise
+// console.error (stderr) kullandığı için KRİTİK satırlar arayüze hiç düşmüyordu.
+// ⚠️ DÜZELTME (v2): Önceki yaklaşımda her attachConsoleBridge çağrısı write fonksiyonunu
+// tamamen değiştiriyordu; birden fazla socket bağlıyken son bağlanan öncekini ezerdi.
+// Şimdi aktif socket referansı tutulur ve detach'te yalnızca eşleşen socket temizlenir.
 const originalStdoutWrite = process.stdout.write.bind(process.stdout);
 const originalStderrWrite = process.stderr.write.bind(process.stderr);
+let bridgedSocket = null;
 
-// ⚠️ DÜZELTME: Önceden yalnızca stdout hooklanıyordu. logger.logError() ise
-// console.error (stderr) kullandığı için "self-healing başarısız", "keşif
-// durduruluyor" gibi KRİTİK satırlar arayüze hiç düşmüyordu. Artık iki akış da
-// köprüleniyor (Playwright'ın stderr çıktısı da dahil).
+process.stdout.write = (chunk, encoding, callback) => {
+    if (bridgedSocket) bridgedSocket.emit('log', chunk.toString());
+    return originalStdoutWrite(chunk, encoding, callback);
+};
+process.stderr.write = (chunk, encoding, callback) => {
+    if (bridgedSocket) bridgedSocket.emit('log', chunk.toString());
+    return originalStderrWrite(chunk, encoding, callback);
+};
+
 function attachConsoleBridge(socket) {
-    process.stdout.write = (chunk, encoding, callback) => {
-        socket.emit('log', chunk.toString());
-        return originalStdoutWrite(chunk, encoding, callback);
-    };
-    process.stderr.write = (chunk, encoding, callback) => {
-        socket.emit('log', chunk.toString());
-        return originalStderrWrite(chunk, encoding, callback);
-    };
+    bridgedSocket = socket;
 }
 
 function detachConsoleBridge() {
-    process.stdout.write = originalStdoutWrite;
-    process.stderr.write = originalStderrWrite;
+    bridgedSocket = null;
 }
 
 // 🔒 İstemciden gelen klasör yolu doğrulanmadan kullanılmaz.
@@ -317,7 +330,27 @@ function cleanReportDirs() {
 
 const npxCmd = process.platform === 'win32' ? 'npx.cmd' : 'npx';
 
-app.post('/upload', requireAuth, (req, res) => {
+// 🚦 /upload endpoint'i için hız sınırı (dosya yükleme spam'ini önler).
+const uploadAttempts = new Map(); // ip -> { count, resetAt }
+const UPLOAD_MAX_ATTEMPTS = 20;
+const UPLOAD_WINDOW_MS = 60 * 1000;
+
+function uploadRateLimit(req, res, next) {
+    const ip = req.ip || 'bilinmeyen';
+    const now = Date.now();
+    const rec = uploadAttempts.get(ip);
+    if (!rec || now > rec.resetAt) {
+        uploadAttempts.set(ip, { count: 1, resetAt: now + UPLOAD_WINDOW_MS });
+        return next();
+    }
+    rec.count += 1;
+    if (rec.count > UPLOAD_MAX_ATTEMPTS) {
+        return res.status(429).json({ error: 'Çok fazla dosya yükleme denemesi. Lütfen bir dakika sonra tekrar deneyin.' });
+    }
+    return next();
+}
+
+app.post('/upload', requireAuth, uploadRateLimit, (req, res) => {
     // multer'ı manuel çağırıp boyut/tip hatalarını 400 ile düzgün döndürüyoruz (aksi halde 500).
     upload.single('scenarioFile')(req, res, (uploadErr) => {
         if (uploadErr) return res.status(400).json({ error: uploadErr.message });
@@ -578,7 +611,7 @@ io.on('connection', (socket) => {
         };
 
         const testProcess = spawn(npxCmd, ['playwright', 'test', '--reporter=list,allure-playwright'], {
-            env: envVars, shell: true, cwd: __dirname
+            env: envVars, cwd: __dirname
         });
 
         testProcess.on('error', (err) => {
@@ -596,7 +629,7 @@ io.on('connection', (socket) => {
             // ⚠️ DÜZELTME: cwd eklendi. Göreli './allure-results' yolları sunucu farklı
             // bir dizinden başlatıldığında yanlış klasöre bakıyordu.
             const allureProcess = spawn(npxCmd, ['allure', 'generate', './allure-results', '-o', './allure-report', '--clean'], {
-                shell: true, cwd: __dirname
+                cwd: __dirname
             });
 
             allureProcess.on('error', (err) => {

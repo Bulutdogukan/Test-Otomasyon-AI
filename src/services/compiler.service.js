@@ -106,7 +106,7 @@ function compilePlaywrightCode(stepHistory, url, testPlan, testFilePath) {
         emitted++;
         tsCode += `    // Adım ${emitted}: [${action.toUpperCase()}] İşlemi\n`;
         tsCode += line;
-        tsCode += `    await page.waitForTimeout(1000);\n\n`;
+        tsCode += `    await page.waitForLoadState('domcontentloaded');\n\n`;
     });
 
     if (emitted === 0) {

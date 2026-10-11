@@ -1,6 +1,8 @@
 node_modules/
 .env
-.DS_Store
+**/.DS_Store
+dist/
+*.log
 
 # Proje dışı içerik
 linkedin-gorseller/
@@ -12,8 +14,9 @@ allure-report/
 playwright-report/
 test-results/
 
-# AI tarafından üretilen betik (her koşuda yeniden yazılır)
+# AI tarafından üretilen geçici dosyalar (her koşuda yeniden yazılır)
 tests/ai_generated.spec.ts
+tests/ai_generated.feature
 
 # NOT: tests/generated/features/*.feature VE tests/generated/specs/*.spec.ts kasıtlı olarak
 # git'e dahil edilir. .spec.ts, canlı DOM keşfinden derlendiği için .feature'dan tek başına
@@ -27,3 +30,10 @@ uploads/
 
 # Claude Code yerel araç ayarları (makineye özel)
 .claude/
+
+# Diğer AI ajan yapılandırmaları (makineye özel)
+AGENTS.md
+
+# Güncelleme ve karşılaştırma raporları (geçici belgeler)
+GUNCELLEME_RAPORU.md
+ONCEKI_SONRAKI_KARSILASTIRMA.md

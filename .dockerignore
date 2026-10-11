@@ -1,0 +1,15 @@
+node_modules
+.env
+.git
+.github
+allure-results
+allure-report
+playwright-report
+test-results
+.batch-staging
+uploads
+linkedin-gorseller
+linkedin-post
+*.md
+!README.md
+!CONTRIBUTING.md

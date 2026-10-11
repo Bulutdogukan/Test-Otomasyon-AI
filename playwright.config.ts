@@ -35,8 +35,12 @@ export default defineConfig({
     ...(process.env.PW_WS_ENDPOINT ? { connectOptions: { wsEndpoint: process.env.PW_WS_ENDPOINT } } : {}),
     trace: 'retain-on-failure', // Ölçeklenmede 'on' ağır disk/performans yükü yaratır
     // AI-Agent'tan gelen E/H komutlarını doğrudan Playwright'a bağlıyoruz
-    video: (process.env.SAVE_VIDEO as any) || 'off',
-    screenshot: (process.env.SAVE_SCREENSHOT as any) || 'only-on-failure',
+    video: (['on', 'off', 'retain-on-failure', 'on-first-retry'].includes(process.env.SAVE_VIDEO || '')
+      ? process.env.SAVE_VIDEO as 'on' | 'off' | 'retain-on-failure' | 'on-first-retry'
+      : 'off'),
+    screenshot: (['on', 'off', 'only-on-failure'].includes(process.env.SAVE_SCREENSHOT || '')
+      ? process.env.SAVE_SCREENSHOT as 'on' | 'off' | 'only-on-failure'
+      : 'only-on-failure'),
   },
 
   /* 🌍 KAPSAMLI TEST MATRİSİ */

@@ -11,40 +11,37 @@
         .app-container { display: flex; flex-direction: column; height: 100%; width: 100%; }
 
         /* Sol Menü */
-        .sidebar { background-color: #111827; padding: 25px; display: flex; flex-direction: column; overflow-y: auto; border-bottom: 1px solid #1f2937; }
-        .header { margin-bottom: 25px; }
-        .header h1 { color: #facc15; font-size: 20px; font-weight: 600; display: flex; align-items: center; gap: 8px; }
-        .header p { color: #6b7280; font-size: 13px; margin-top: 4px; }
+        .sidebar { background-color: #111827; padding: 20px; display: flex; flex-direction: column; overflow-y: auto; border-bottom: 1px solid #1f2937; }
+        .header { margin-bottom: 18px; }
+        .header h1 { color: #facc15; font-size: 17px; font-weight: 600; display: flex; align-items: center; gap: 8px; }
+        .header p { color: #6b7280; font-size: 12px; margin-top: 3px; }
 
         /* Form ve Inputlar */
-        .input-group { margin-bottom: 15px; }
-        label { display: block; font-size: 13px; font-weight: 500; color: #9ca3af; margin-bottom: 6px; }
-        input[type="text"], input[type="password"], textarea, select { width: 100%; background: #0b0f19; border: 1px solid #374151; color: #e5e7eb; padding: 10px 12px; border-radius: 6px; font-size: 14px; transition: border 0.2s; font-family: inherit; }
+        .input-group { margin-bottom: 12px; }
+        label { display: block; font-size: 12px; font-weight: 500; color: #9ca3af; margin-bottom: 5px; }
+        input[type="text"], input[type="password"], textarea, select { width: 100%; background: #0b0f19; border: 1px solid #374151; color: #e5e7eb; padding: 8px 10px; border-radius: 6px; font-size: 13px; transition: border 0.2s; font-family: inherit; }
         select:focus { outline: none; border-color: #facc15; }
-
-        /* İstediğin Ok Kaldırma Düzenlemesi */
         textarea { resize: none; }
-
         input[type="text"]:focus, input[type="password"]:focus, textarea:focus { outline: none; border-color: #facc15; }
 
         /* Sürükle-Bırak */
-        .dropzone { border: 1.5px dashed #4b5563; border-radius: 6px; padding: 20px; text-align: center; background: #1f2937; cursor: pointer; transition: all 0.2s; margin-bottom: 15px; font-size: 13px; color: #9ca3af; }
+        .dropzone { border: 1.5px dashed #4b5563; border-radius: 6px; padding: 10px; text-align: center; background: #1f2937; cursor: pointer; transition: all 0.2s; margin-bottom: 12px; font-size: 12px; color: #9ca3af; }
         .dropzone:hover, .dropzone.dragover { border-color: #facc15; background: #2a220e; color: #facc15; }
         .dropzone input[type="file"] { display: none; }
 
-        /* Butonlar */
-        .toggles { display: flex; flex-direction: column; gap: 10px; margin-bottom: 20px; background: #0b0f19; padding: 12px; border-radius: 6px; border: 1px solid #1f2937; }
-        .toggles label { color: #d1d5db; display: flex; align-items: center; cursor: pointer; font-size: 13px; margin: 0; }
-        .toggles input { margin-right: 10px; accent-color: #facc15; }
+        /* Butonlar ve Toggle'lar */
+        .toggles { display: flex; flex-wrap: wrap; gap: 6px 14px; margin-bottom: 14px; background: #0b0f19; padding: 10px 12px; border-radius: 6px; border: 1px solid #1f2937; }
+        .toggles label { color: #d1d5db; display: flex; align-items: center; cursor: pointer; font-size: 12px; margin: 0; white-space: nowrap; }
+        .toggles input { margin-right: 6px; accent-color: #facc15; }
 
-        .btn-group { display: flex; gap: 10px; }
-        button { flex: 1; padding: 10px; border: none; border-radius: 6px; font-size: 14px; font-weight: 500; cursor: pointer; transition: all 0.2s; }
+        .btn-group { display: flex; gap: 8px; margin-bottom: 8px; }
+        button { flex: 1; padding: 9px; border: none; border-radius: 6px; font-size: 13px; font-weight: 500; cursor: pointer; transition: all 0.2s; }
         .btn-start { background-color: #facc15; color: #111827; }
         .btn-start:hover { background-color: #ca8a04; }
         .btn-start:disabled { background-color: #374151; color: #9ca3af; cursor: not-allowed; }
         .btn-report { background-color: transparent; color: #facc15; border: 1px solid #facc15; display: none; }
         .btn-report:hover { background-color: #facc15; color: #111827; }
-        .btn-folder { flex: 0 0 auto; background-color: #374151; color: #e5e7eb; padding: 10px 12px; font-size: 13px; }
+        .btn-folder { flex: 0 0 auto; background-color: #374151; color: #e5e7eb; padding: 8px 10px; font-size: 12px; }
         .btn-folder:hover { background-color: #4b5563; }
         .btn-runall { background-color: #34d399; color: #111827; }
         .btn-runall:hover { background-color: #10b981; }
@@ -106,8 +103,8 @@
 <div class="app-container">
     <div class="sidebar">
         <div class="header">
-            <h1>⚙️ YAPAY ZEKA DESTEKLİ TEST AJANI</h1>
-            <p>Web Otomasyon Test Platformu</p>
+            <h1>⚙️ AI Test Otomasyon</h1>
+            <p>Otonom Web Test Platformu</p>
         </div>
 
         <div class="input-group">
@@ -131,16 +128,13 @@
         </div>
 
         <div class="input-group">
-            <label>Dosyadan Yükle (.txt, .feature)</label>
-            <div class="dropzone" id="dropzone">
-                <span id="dropzoneText">📄 Dosyayı sürükleyin veya seçin (Otomatik başlar)</span>
-                <input type="file" id="fileInput" accept=".txt, .feature, .md">
-            </div>
+            <label>Senaryo (Düz Metin veya Gherkin)</label>
+            <textarea id="prompt" rows="4" placeholder="Kullanıcı arama kutusuna 'kredi' yazar..."></textarea>
         </div>
 
-        <div class="input-group">
-            <label>Senaryo (Düz Metin veya Gherkin)</label>
-            <textarea id="prompt" rows="5" placeholder="Kullanıcı arama kutusuna 'kredi' yazar..."></textarea>
+        <div class="dropzone" id="dropzone">
+            <span id="dropzoneText">📄 Dosya yükle (.txt, .feature) — sürükle veya tıkla</span>
+            <input type="file" id="fileInput" accept=".txt, .feature, .md">
         </div>
 
         <div class="toggles">
@@ -151,10 +145,8 @@
 
         <div class="btn-group">
             <button id="startBtn" class="btn-start" onclick="startTest()">▶ Testi Başlat</button>
+            <button id="runAllBtn" class="btn-runall" onclick="runAllTests()">▶▶ Toplu Koş</button>
             <button id="reportBtn" class="btn-report" onclick="openReport()">📊 Rapor</button>
-        </div>
-        <div class="btn-group">
-            <button id="runAllBtn" class="btn-runall" onclick="runAllTests()">▶▶ Tüm Testleri Paralel Çalıştır</button>
         </div>
     </div>
 

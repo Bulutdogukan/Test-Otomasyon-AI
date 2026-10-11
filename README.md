@@ -261,6 +261,11 @@ Bu yapı aşağıdaki temel bileşenlerden oluşur:
 │       └── specs/            # Kalıcı, derlenmiş .spec.ts dosyaları
 ├── scripts/pick-folder.ps1   # Windows native klasör seçme diyaloğu
 ├── .github/workflows/ci.yml  # Tip kontrolü + sözdizimi kapısı
+├── Dockerfile                # Konteyner imajı tanımı
+├── docker-compose.yml        # Ollama + QA sunucusu tek komutla
+├── CONTRIBUTING.md           # Katkıda bulunma rehberi
+├── KULLANIM_KILAVUZU.md      # Kapsamlı kullanıcı kılavuzu
+├── LICENSE                   # ISC lisansı
 ├── .env
 └── .env.example
 ```

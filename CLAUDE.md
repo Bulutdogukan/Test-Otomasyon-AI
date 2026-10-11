@@ -140,5 +140,4 @@ Docker: `Dockerfile` ve `docker-compose.yml` ile konteyner ortamında çalışt�
 
 ## Bilinen Açık Maddeler
 
-- `linkedin-gorseller/` klasörü proje dışı içerik; git'e eklenmemeli.
 - Gelecek planları: çoklu LLM desteği, Selenium fallback, AI destekli hata analizi.

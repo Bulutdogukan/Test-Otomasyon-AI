@@ -1,16 +1,13 @@
 FROM node:18-slim
 
-# Playwright sistem bagimliklarini kur
-RUN npx playwright install-deps chromium
-
 WORKDIR /app
 
 # Bagimlik dosyalarini kopyala ve kur
 COPY package.json package-lock.json ./
 RUN npm ci --omit=dev
 
-# Playwright Chromium tarayicisini kur
-RUN npx playwright install chromium
+# Playwright sistem bagimliklari + Chromium tarayicisi
+RUN npx playwright install-deps chromium && npx playwright install chromium
 
 # Kaynak kodu kopyala
 COPY . .

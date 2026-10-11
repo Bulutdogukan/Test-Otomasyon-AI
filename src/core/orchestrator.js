@@ -417,8 +417,10 @@ async function executeAutonomousFlow(url, userPrompt, useGrid = false, outputDir
             const envVars = { ...process.env, FORCE_COLOR: "1", PW_TEST_DIR: stagingDir };
             const npxCmd = process.platform === 'win32' ? 'npx.cmd' : 'npx';
 
+            // shell: true Windows'ta .cmd dosyalarını çalıştırmak için gereklidir.
+            // Argümanlar kullanıcı girdisi değil, tümü sabit veya sistem üretimi.
             const testProcess = spawn(npxCmd, ['playwright', 'test', specFileName, '--reporter=list,allure-playwright', '--workers=1'], {
-                env: envVars, cwd: PROJECT_ROOT
+                env: envVars, shell: true, cwd: PROJECT_ROOT
             });
 
             // ⚠️ DÜZELTME: spawn 'error' olayı (örn. npx PATH'te yok, izin hatası) artık
@@ -436,7 +438,7 @@ async function executeAutonomousFlow(url, userPrompt, useGrid = false, outputDir
                 // ⚠️ DÜZELTME: cwd eklendi — göreli './allure-results' yolu, süreç
                 // farklı bir çalışma dizininden başlatıldığında yanlış klasöre bakıyordu.
                 const allureProcess = spawn(npxCmd, ['allure', 'generate', './allure-results', '-o', './allure-report', '--clean'], {
-                    cwd: PROJECT_ROOT
+                    shell: true, cwd: PROJECT_ROOT
                 });
 
                 // ⚠️ DÜZELTME: Allure başlatılamazsa AKIŞ ÇÖKMEZ; testin gerçek sonucu

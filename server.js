@@ -610,8 +610,10 @@ io.on('connection', (socket) => {
             isBatchRunning = false;
         };
 
+        // shell: true Windows'ta .cmd dosyalarını çalıştırmak için gereklidir.
+        // Argümanlar kullanıcı girdisi değil, tümü sabit veya sistem üretimi.
         const testProcess = spawn(npxCmd, ['playwright', 'test', '--reporter=list,allure-playwright'], {
-            env: envVars, cwd: __dirname
+            env: envVars, shell: true, cwd: __dirname
         });
 
         testProcess.on('error', (err) => {
@@ -629,7 +631,7 @@ io.on('connection', (socket) => {
             // ⚠️ DÜZELTME: cwd eklendi. Göreli './allure-results' yolları sunucu farklı
             // bir dizinden başlatıldığında yanlış klasöre bakıyordu.
             const allureProcess = spawn(npxCmd, ['allure', 'generate', './allure-results', '-o', './allure-report', '--clean'], {
-                cwd: __dirname
+                shell: true, cwd: __dirname
             });
 
             allureProcess.on('error', (err) => {

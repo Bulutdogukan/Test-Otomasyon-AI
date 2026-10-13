@@ -15,14 +15,21 @@ jobs:
 
       - uses: actions/setup-node@v4
         with:
-          node-version: '18'
+          node-version: '22'
           cache: 'npm'
 
-      - name: Bagimlilik kurulumu
+      - name: Bağımlılık kurulumu
         run: npm ci
 
-      - name: TypeScript tip kontrolu
+      - name: TypeScript tip kontrolü
         run: npm run typecheck
 
-      - name: Node sozdizimi kontrolu
+      - name: Node sözdizimi kontrolü
         run: node --check server.js ai-agent2.js src/**/*.js
+
+      # Birim testleri Ollama gerektirmez; DOM tarayıcı testleri headless Chromium kullanır.
+      - name: Chromium kurulumu
+        run: npx playwright install --with-deps chromium
+
+      - name: Birim testleri
+        run: npm run test:unit

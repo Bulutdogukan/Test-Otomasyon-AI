@@ -1,84 +1,101 @@
-# Katkida Bulunma Rehberi
+# Katkıda Bulunma Rehberi
 
-Bu projeye katkida bulunmak istiyorsaniz asagidaki kurallara uymaniz beklenir.
+Bu projeye katkıda bulunmak istiyorsanız aşağıdaki kurallara uymanız beklenir.
 
 ---
 
-## Gelistirme Ortami Kurulumu
+## Geliştirme Ortamı Kurulumu
 
 ```bash
 git clone https://github.com/Bulutdogukan/Test-Otomasyon-AI.git
 cd Test-Otomasyon-AI
-npm install
-npx playwright install
-cp .env.example .env   # ardindan .env dosyasini doldurun
+npm ci
+npx playwright install chromium
+cp .env.example .env   # ardından .env dosyasını doldurun
 ```
 
-Ollama'nin kurulu ve calisir durumda olmasi gerekir (`ollama serve`).
+Node.js 22 LTS veya üzeri gerekir. Test üretimini denemek için Ollama'nın çalışıyor
+olması gerekir; birim testleri ve tip kontrolü Ollama olmadan çalışır.
 
 ---
 
-## Dal (Branch) Kurallari
+## Dal (Branch) Kuralları
 
-- `main` dali her zaman calisir ve kararli olmalidir.
-- Yeni calismalara `main`'den yeni bir dal acarak baslayin.
-- Dal adlandirma: `<tip>/<kisa-aciklama>` (ornek: `feat/docker-support`, `fix/cors-config`).
+- `main` dalı her zaman çalışır ve kararlı olmalıdır.
+- Yeni çalışmalara `main`'den yeni bir dal açarak başlayın.
+- Dal adlandırma: `<tip>/<kısa-açıklama>` (örnek: `feat/dosya-yukleme`, `fix/iframe-locator`).
 
-| Tip        | Kullanim                              |
-| ---------- | ------------------------------------- |
-| `feat/`    | Yeni ozellik                          |
-| `fix/`     | Hata duzeltmesi                       |
-| `refactor/`| Davranisi degistirmeyen yeniden yapilandirma |
-| `docs/`    | Yalnizca dokumantasyon degisikligi    |
-| `test/`    | Test ekleme/duzeltme                  |
+| Tip | Kullanım |
+| --- | --- |
+| `feat/` | Yeni özellik |
+| `fix/` | Hata düzeltmesi |
+| `refactor/` | Davranışı değiştirmeyen yeniden yapılandırma |
+| `docs/` | Yalnızca dokümantasyon değişikliği |
+| `test/` | Test ekleme/düzeltme |
 
 ---
 
-## Commit Mesaji Formati
+## Commit Mesajı Formatı
 
 ```
-<tip>: kisa aciklama (Turkce)
+<tip>: kısa açıklama (Türkçe)
 ```
 
-Ornekler:
-- `feat: arayuzden model secimi eklendi`
-- `fix: CORS yapilandirmasi duzeltildi`
-- `docs: README kurulum adimlari guncellendi`
+Örnekler:
+- `feat: arayüzden model seçimi eklendi`
+- `fix: iframe içindeki şifre alanı maskelenmiyordu`
+- `docs: kılavuza SSO bölümü eklendi`
 
 ---
 
-## Pull Request Sureci
+## Pull Request Süreci
 
-1. Degisikliklerinizi kendi dalinizda commit edin.
-2. `npm run typecheck` ile tip kontrolunden gectiginden emin olun.
-3. PR acmadan once `main`'i daliniza merge edin (catismalari cozun).
-4. PR basligini commit mesaji formatinda yazin.
-5. PR aciklamasinda **ne degisti** ve **neden degisti** yayin.
+1. Değişikliklerinizi kendi dalınızda commit edin.
+2. Aşağıdaki üç kontrolün yerelde geçtiğinden emin olun (CI de aynılarını koşar):
+   ```bash
+   npm run typecheck
+   npm run test:unit
+   node --check server.js ai-agent2.js src/**/*.js
+   ```
+3. Keşif / derleme davranışını değiştirdiyseniz en az bir senaryoyu gerçek Ollama ile
+   uçtan uca deneyin ve sonucu PR açıklamasına yazın.
+4. PR açmadan önce `main`'i dalınıza alın (çakışmaları çözün).
+5. PR açıklamasında **ne değişti** ve **neden değişti** yazın.
 
 ---
 
-## Kod Kurallari
+## Kod Kuralları
 
-- **Dil:** Kod yorumlari, log mesajlari ve arayuz **Turkce**. LLM'e giden sistem prompt'lari **Ingilizce**.
-- **LLM ciktisi guvenilmeyen girdidir.** Uretilen koda giren her metin `JSON.stringify()` ile kacislanir.
-- **`{ force: true }` kullanilmaz.** Gorunurluk kontrollerini bypass etmek yanlis-pozitif test uretir.
-- **Eylem adlari `src/utils/steps.js`'ten normalize edilir.** Yeni eylem ekliyorsaniz tek noktadan ekleyin.
-- **Bos beklenen degerli dogrulama uretilmez.** `validateAssert()` bunu hem kesifte hem derlemede reddeder.
+- **Dil:** Kod yorumları, log mesajları ve arayüz **Türkçe**. LLM'e giden sistem prompt'ları **İngilizce**.
+- **LLM çıktısı güvenilmeyen girdidir.** Üretilen koda giren her metin `JSON.stringify()` ile
+  kaçışlanır; locator'lar `locatorExpression()` üzerinden koda dökülür.
+- **`{ force: true }` kullanılmaz.** Görünürlük kontrollerini atlamak yanlış-pozitif test üretir.
+- **Eylem adları `src/utils/steps.js`'ten normalize edilir.** Yeni eylemi tek noktadan ekleyin;
+  keşif (`orchestrator.js`) ve derleme (`compiler.service.js`) aynı kuralları paylaşmalıdır.
+- **Boş beklenen değerli doğrulama üretilmez.** `validateAssert()` bunu hem keşifte hem derlemede reddeder.
+- **Hedefe ulaşmayan keşif kaydedilmez.** Yarım veya doğrulamasız bir testin kütüphaneye
+  girmesine yol açacak değişiklik yapmayın.
+- **Gizli değerler düz metin olarak hiçbir yere yazılmaz.** Spec, feature ve loglar
+  `src/utils/secrets.js` üzerinden geçer.
+- **Hedef URL kuralı tek yerdedir** (`src/utils/url.js`); arayüz ve CLI aynı fonksiyonu kullanır.
 
-Detaylar icin `CLAUDE.md` dosyasindaki "Yerlesik Kurallar" bolumune bakin.
+Ayrıntılar için `CLAUDE.md` dosyasındaki "Yerleşik Kurallar" bölümüne bakın.
 
 ---
 
 ## Test Ekleme
 
-- Elle yazilan testler `tests/` altina (ornek: `tests/advanced_scenarios.spec.ts`).
-- AI uretimi testler `tests/generated/` altinda otomatik birikir; elle mudahale etmeyin.
-- Her PR oncesi `npm run typecheck` gecmelidir.
+- Saf mantık ve DOM tarayıcı testleri `tests/unit/` altına (`node:test`, `npm run test:unit`).
+  Bu testler Ollama gerektirmemelidir.
+- Elle yazılan Playwright testleri `tests/` altına (örnek: `tests/advanced_scenarios.spec.ts`).
+- AI üretimi testler `tests/generated/` altında otomatik birikir. Gözden geçirilip
+  onaylanmadan commit edilmemelidir.
 
 ---
 
-## Guvenlik
+## Güvenlik
 
-- `.env` dosyasini ASLA commit etmeyin.
-- Uretilen testlerde gercek kimlik bilgisi bulunmamalidir.
-- Yeni endpoint ekliyorsaniz `requireAuth` middleware'ini uygulayin.
+- `.env` dosyasını ve `auth/` klasörünü ASLA commit etmeyin.
+- Üretilen testlerde gerçek kimlik bilgisi bulunmamalıdır (`secret("QA_SECRET_...")` kullanılmalı).
+- Yeni bir HTTP ucu veya Socket.io olayı ekliyorsanız `requireAuth` / el sıkışma
+  korumasının kapsamında olduğundan emin olun.

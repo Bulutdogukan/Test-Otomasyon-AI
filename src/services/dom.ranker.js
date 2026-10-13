@@ -23,11 +23,16 @@ function tokenize(text) {
 
 // Etkileşim olasılığı yüksek elemanlar (input/buton) düşük alaka skorunda bile
 // elenmesin diye küçük bir taban ağırlık alır.
+// Etiket önekleri src/services/dom.scanner.js ile aynıdır.
+const TYPE_BONUS = {
+    '[Giriş Kutusu]': 3, '[Şifre Kutusu]': 3, '[Açılır Liste]': 3,
+    '[Buton]': 2, '[Seçim Kutusu]': 2,
+    '[Link]': 1, '[Başlık]': 1, '[Uyarı]': 1
+};
+
 function typeBonus(label) {
-    if (label.startsWith('[Giriş Kutusu]')) return 3;
-    if (label.startsWith('[Buton]')) return 2;
-    if (label.startsWith('[Link]')) return 1;
-    return 0;
+    const prefix = label.slice(0, label.indexOf(']') + 1);
+    return TYPE_BONUS[prefix] || 0;
 }
 
 /**

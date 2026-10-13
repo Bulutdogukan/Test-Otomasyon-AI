@@ -23,12 +23,13 @@ tutarlı uyuyor). Bu ayrımı koru.
 ```bash
 npm start           # Sunucu + arayüz  -> http://localhost:3000
 npm run typecheck   # tsc --noEmit (CI'ın da çalıştırdığı kapı)
+npm run test:unit   # tests/unit — Ollama gerektirmez (DOM testleri headless Chromium)
 npm run test:all    # tests/generated/specs altındaki tüm testleri paralel koş
 npm run report      # Allure raporu üret ve aç
 node ai-agent2.js <url> "<senaryo>" [--grid]   # CLI modu
 ```
 
-Ön koşullar: Node 18+, `npx playwright install`, çalışan bir Ollama örneği.
+Ön koşullar: Node 22+, `npx playwright install`, çalışan bir Ollama örneği.
 `.env` yoksa `.env.example` kopyalanır — tüm değişkenler orada açıklamalı.
 
 ---
@@ -38,11 +39,12 @@ node ai-agent2.js <url> "<senaryo>" [--grid]   # CLI modu
 `src/core/orchestrator.js` → `executeAutonomousFlow()` her şeyi sırayla yürütür:
 
 1. **Planlama** — `agentPlanTest()` doğal dili BDD/Gherkin `.feature` metnine çevirir.
-2. **Keşif** — Gerçek tarayıcı açılır. Döngü: canlı DOM taranır → alaka sırasına göre
+2. **Keşif** — Gerçek tarayıcı açılır. Döngü: canlı DOM taranır (iframe + açık shadow DOM dahil) → alaka sırasına göre
    kırpılır → LLM'den TEK bir sonraki adım istenir → adım uygulanır → tekrar.
    Adım başarısız olursa **self-healing** devreye girer: DOM yeniden taranır, LLM'den
    aynı niyete uyan alternatif locator istenir, yeniden denenir.
-3. **Derleme** — Biriken adım geçmişi `compiler.service.js` ile statik `.spec.ts`'e çevrilir.
+3. **Derleme** — Keşif hedefe ulaştıysa (DONE + en az bir assert) adım geçmişi `compiler.service.js`
+   ile statik `.spec.ts`'e çevrilir. Ulaşmadıysa hiçbir şey yazılmaz, akış hata ile biter.
 4. **Koşum + Rapor** — Spec `.batch-staging/`'e kopyalanıp Playwright ile koşulur, Allure üretilir.
 
 | Dosya | Sorumluluk |
@@ -51,9 +53,15 @@ node ai-agent2.js <url> "<senaryo>" [--grid]   # CLI modu
 | `src/core/orchestrator.js` | Keşif döngüsü, self-healing, boru hattı orkestrasyonu |
 | `src/services/ai.service.js` | Ollama çağrıları (planner / locator / self-healing), timeout + retry |
 | `src/services/compiler.service.js` | Adım geçmişi → `.spec.ts` kod üretimi |
+| `src/services/dom.scanner.js` | Canlı DOM taraması: iframe zinciri, shadow DOM, kararlı locator önceliği, gürültü eleme |
 | `src/services/dom.ranker.js` | DOM kırpma (bağımlılıksız, deterministik "fakir adamın RAG'ı") |
 | `src/utils/steps.js` | Eylem normalizasyonu + doğrulama kuralları (keşif ve derleme paylaşır) |
 | `src/utils/staging.js` | Koşum öncesi spec kopyalama — modül çözümlemesi için kritik |
+| `src/utils/locator.js` | iframe locator zinciri (`a |> b`) — keşif çalıştırır, derleyici koda döker |
+| `src/utils/secrets.js` | `QA_SECRET_*` yer tutucuları, çözümleme ve maskeleme |
+| `src/utils/url.js` | Hedef URL politikası — arayüz ve CLI ortak |
+| `src/utils/npx.js` | npx süreçlerini tek metin komutla başlatır (Node 24 DEP0190) |
+| `src/utils/reportDirs.js` | Rapor klasörlerinin İÇERİĞİNİ temizler (Docker hacmi silinemez) |
 | `public/index.html` | Tek dosya arayüz (harici bağımlılık yok) |
 
 ---
@@ -74,6 +82,29 @@ test. `validateAssert()` bunu hem keşifte hem derlemede reddeder.
 boru hattının 3. adımında diske düşer. Erken yazmak, keşif yarıda kalınca kalıcı
 kütüphanede eşi olmayan `.feature` dosyaları bırakıyordu.
 
+**Hedefe ulaşmayan keşif kaydedilmez.** `goalReached` yalnızca model DONE dediğinde, geçen bir
+assert tekrarlandığında veya hedef doğrulandıktan sonra döngüye girildiğinde true olur; her
+durumda en az bir assert şarttır. Self-healing tükenmesi, adım sınırı, döngü → feature/spec
+YAZILMAZ. Eskiden yarım keşif derlenip yeşil geçiyordu.
+
+**Tırnaklı beklentiler doğrulanmadan bitirilmez.** Kullanıcı senaryosundaki '...' / "..." metinleri
+`missingExpectations()` ile kontrol edilir (Türkçe ek kesmeleri hariç). Model ekranda gördüğünü
+doğrulayıp bitirmeye eğilimli; bu kontrol onu engeller.
+
+**Keşif ajanı özgün metni de görür.** Planlayıcı değerleri bozabiliyor ("ali" → "Ali");
+`goalText` = Gherkin planı + kullanıcının özgün (maskelenmiş) metni.
+
+**Gizli değerler düz metin olarak hiçbir yere yazılmaz.** LLM ve stepHistory yalnızca
+`{{QA_SECRET_X}}` görür; tarayıcıya yazarken `resolveSecretValue`, spec'te `secret("QA_SECRET_X")`,
+feature/log'da `redactSecrets`. Literal gizli değerler de `toStoredValue` ile yer tutucuya çevrilir.
+
+**İç ağ varsayılan olarak serbesttir.** Araç kurumun kendi staging ortamlarını test etmek için var;
+eski SSRF engeli asıl kullanımı engelliyordu. Kısıtlama yalnızca `QA_BLOCK_PRIVATE_URLS` /
+`QA_ALLOWED_HOSTS` ile. Arayüz ve CLI `src/utils/url.js`'i paylaşır.
+
+**Rapor klasörlerinin kendisi silinmez, içi boşaltılır.** Docker'da `allure-report` bir hacimdir;
+`rmSync(dir)` EBUSY ile her koşumu çökertiyordu.
+
 **`{ force: true }` kullanılmaz.** Görünürlük/etkileşilebilirlik kontrollerini bypass
 etmek yanlış-pozitif test üretir.
 
@@ -91,6 +122,9 @@ yalnızca stdout hooklanırsa kritik hatalar arayüze hiç düşmez.
 proje dışında olabilir; doğrudan koşulursa Node `@playwright/test`'i yanlış bir
 `node_modules`'ten çözer ve "No tests found" hatası verir.
 
+**npx yalnızca `spawnNpx` ile başlatılır.** Windows'ta .cmd için shell gerekir; argüman dizisi +
+`shell: true` Node 24'te DEP0190 verir. Komut tek metin olarak, güvenli karakter kontrolüyle kurulur.
+
 **Klasör yolları CLI argümanına girmez.** `PW_TEST_DIR` env'i ile config'e iletilir
 (boşluklu yol / kaçışlama sorunu yaşanmaz).
 
@@ -98,12 +132,13 @@ proje dışında olabilir; doğrudan koşulursa Node `@playwright/test`'i yanlı
 
 ## Güvenlik
 
-`.env` içindeki `APP_TOKEN` tanımlıysa Socket.io el sıkışması, `/upload` ve `/allure`
+Sunucu varsayılan olarak `HOST=127.0.0.1` dinler (yalnızca bu makine). `.env` içindeki `APP_TOKEN` tanımlıysa Socket.io el sıkışması, `/upload` ve `/allure`
 bu anahtarı ister; arayüz giriş ekranı gösterir. Tanımlı değilse koruma kapalıdır ve
 sunucu açılışta uyarır (tek makinede lokal kullanım için kabul edilebilir).
 
-Ek sıkılaştırma: `HOST=127.0.0.1` (ağa hiç açma), `QA_ALLOWED_ROOT` (seçilebilecek
-klasörleri tek köke kısıtla).
+Ağa açmak için `HOST=0.0.0.0` + `APP_TOKEN` birlikte verilir. Ek sıkılaştırma: `QA_ALLOWED_ROOT`
+(seçilebilecek klasörleri tek köke kısıtla), `QA_ALLOWED_HOSTS`, `QA_BLOCK_PRIVATE_URLS`.
+Kayıtlı oturumlar (`STORAGE_STATE`) `auth/` altındadır ve gitignore'dadır.
 
 `.env` asla commit edilmez. Üretilen testlerde gerçek kimlik bilgisi bulunmamalı.
 
@@ -129,15 +164,22 @@ bağlanılan Mac Mini, Docker, CI) `.env` dosyasına `HEADLESS=true` ekle.
 Grid: `chromium.connect` **Playwright protokolü** ister. Vanilla Selenium Grid 4 uymaz —
 `npx playwright run-server` veya Aerokube Moon kullan.
 
-CI (`.github/workflows/ci.yml`) yalnızca tip kontrolü (`tsc --noEmit`) + sözdizimi
-kapısıdır (`node --check`). Gerçek test koşumu bilinçli olarak CI'da yapılmaz: canlı
-Ollama ve gerçek hedef sitelere erişim gerekir.
+CI (`.github/workflows/ci.yml`) tip kontrolü (`tsc --noEmit`) + sözdizimi (`node --check`) +
+birim testleri (`npm run test:unit`, headless Chromium ile) koşar. AI ile test üretimi bilinçli olarak CI'da yapılmaz:
+canlı Ollama ve gerçek hedef sitelere erişim gerekir.
 
-Docker: `Dockerfile` ve `docker-compose.yml` ile konteyner ortamında çalıştırılabilir.
-`docker compose up` Ollama ve QA sunucusunu birlikte ayağa kaldırır.
+Docker: resmi Playwright imajı (`mcr.microsoft.com/playwright`, sürüm package-lock ile aynı
+olmalı) + Allure için JRE. `@playwright/test` ve allure paketleri çalışma anında gerektiği
+için `dependencies` altındadır (`npm ci --omit=dev` onları atlamamalı). Portlar varsayılan
+olarak yalnızca 127.0.0.1'e yayınlanır. Compose, `OLLAMA_MODEL`'i projedeki `.env`'den okur.
 
 ---
 
 ## Bilinen Açık Maddeler
 
-- Gelecek planları: çoklu LLM desteği, Selenium fallback, AI destekli hata analizi.
+- Eşzamanlılık: orchestrator global `process.env`'e ve sabit klasörlere yazar; çok kullanıcı
+  için iş kuyruğu + akış başına izole çalışma dizini gerekir.
+- Desteklenmeyen eylemler: dosya yükleme, tarayıcı dialog'ları (Playwright varsayılanı reddeder),
+  çift/sağ tık. Aynı eylemin bilinçli tekrarı döngü korumasına takılır.
+- LLM kalitesi: 3B modeller sayfada olmayan eleman uydurur; 7B önerilen alt sınır.
+- Gelecek planları: çoklu LLM desteği, AI destekli hata analizi.

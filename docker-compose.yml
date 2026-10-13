@@ -1,20 +1,39 @@
 services:
   ollama:
     image: ollama/ollama:latest
+    # Yalnızca bu makineden erişilebilir (ağa açılmaz).
     ports:
-      - "11434:11434"
+      - "127.0.0.1:11434:11434"
     volumes:
       - ollama_data:/root/.ollama
+    # NVIDIA GPU'lu Linux sunucuda modeli GPU'da koşturmak için aşağıyı açın
+    # (NVIDIA Container Toolkit gerekir). GPU'suz çalışma çok daha yavaştır.
+    # deploy:
+    #   resources:
+    #     reservations:
+    #       devices:
+    #         - driver: nvidia
+    #           count: all
+    #           capabilities: [gpu]
 
   qa-server:
     build: .
+    # Varsayılan: arayüz yalnızca bu makineden açılır. Ağdaki başka makinelere
+    # açmak için "3000:3000" yapın VE .env içinde APP_TOKEN tanımlayın.
     ports:
-      - "3000:3000"
+      - "127.0.0.1:3000:3000"
     environment:
       - OLLAMA_URL=http://ollama:11434/api/chat
-      - OLLAMA_MODEL=qwen2.5-coder:7b
+      - OLLAMA_MODEL=${OLLAMA_MODEL:-qwen2.5-coder:7b}
       - HEADLESS=true
       - HOST=0.0.0.0
+      - APP_TOKEN=${APP_TOKEN:-}
+      - STORAGE_STATE=${STORAGE_STATE:-}
+    # Gizli test verileri (QA_SECRET_*) ve diğer ayarlar .env'den okunur (varsa).
+    # Yukarıdaki "environment" değerleri .env'dekilerden önceliklidir.
+    env_file:
+      - path: .env
+        required: false
     depends_on:
       - ollama
     volumes:

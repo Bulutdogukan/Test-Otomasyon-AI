@@ -4,7 +4,18 @@ Bu proje, modern web uygulamalarının test süreçlerini optimize etmek amacıy
 
 Doğal dil ile verilen test senaryolarını analiz eder, hedef web sayfasının DOM yapısını yorumlar ve **Playwright** üzerinden çalıştırılabilir, doğrulama (assertion) içeren test kodları üreterek otomatik test süreçlerini yürütür.
 
-Üretilen doğrulamalar boş beklenen değerle yazılmaz: beklenen değeri olmayan bir `url`/`text` doğrulaması her koşulda geçeceği için teste hiç eklenmez, böylece "hep yeşil yanan ama hiçbir şey güvence altına almayan" testler oluşmaz.
+Yapay zekâ modeli (Ollama) tamamen yerelde çalışır; senaryolar, ekran içerikleri ve şifreler hiçbir bulut servisine gönderilmez.
+
+Araç, "hep yeşil yanan ama hiçbir şey güvence altına almayan" test üretmemek için bilinçli olarak tutucudur:
+
+* Senaryonun hedefine ulaşamayan keşif **kaydedilmez** (yarım test yeşil geçerdi).
+* En az bir doğrulama (assert) içermeyen test **kaydedilmez**.
+* Senaryoda tırnak içinde yazılan beklenti (`'Sipariş alındı'`) doğrulanmadan senaryo bitmiş sayılmaz.
+* Boş beklenen değerli doğrulama (her URL'yi / her metni eşleyen) teste yazılmaz.
+* Keşifte başarısız olan doğrulama teste olduğu gibi yazılır; test dürüstçe kırmızı yanar.
+
+> 📘 Kurulum, iyi senaryo yazımı, sonuçların yorumlanması ve **bilinen sınırlamalar** için
+> [KULLANIM_KILAVUZU.md](KULLANIM_KILAVUZU.md) dosyasına bakın.
 
 ---
 
@@ -26,9 +37,18 @@ Teknik olmayan kullanıcıların da kolayca test başlatabilmesi için `Socket.i
 
 Her test çalıştırmasının ardından otomatik olarak detaylı **Allure Reports** oluşturulur ve tarayıcı üzerinden görüntülenebilir.
 
-## 🚫 Reklam Gürültüsünün Elenmesi
+## 🏢 Kurumsal Uygulamalara Uygun DOM Taraması
 
-DOM taranırken reklam/sponsorlu görünen elemanlar (`[id*="ad"]`, `[class*="sponsored"]`, `[class*="promo"]`, `[class*="reklam"]` altındakiler) ile görünmeyen elemanlar dışarıda bırakılır. Böylece modele yalnızca gerçekten etkileşilebilir elemanlar gider; hem token tüketimi hem yanlış locator seçme riski düşer. Yeni açılan sekmeler otomatik olarak takip edilir ve ajan odağını yeni sekmeye kaydırır.
+* **iframe ve shadow DOM:** Görünür iframe'lerin (ödeme formları, eski portal ekranları) ve açık shadow DOM'un (web component'ler) içi taranır; üretilen test `page.frameLocator(...)` zinciri kullanır.
+* **Kararlı locator önceliği:** `data-testid` > kararlı `id` > `name` > `aria-label` > `placeholder` > metin. Framework'lerin her yüklemede değiştirdiği id'ler (`ember1234`, `ctl00_...`, `j_idt12`, `:r1:`) tanınır ve yalnızca son çare olarak kullanılır.
+* **Gürültü eleme:** Reklam kapsayıcıları, görünmez elemanlar, kapalı yan menüler (`aria-hidden`, `inert`, ekran dışı) ve 0×0 izleme iframe'leri modele gönderilmez.
+* **İç ağ:** `localhost`, `10.x`, `192.168.x` ve kurum içi alan adları varsayılan olarak serbesttir; `QA_ALLOWED_HOSTS` / `QA_BLOCK_PRIVATE_URLS` ile kısıtlanabilir.
+* Yeni açılan sekmeler otomatik olarak takip edilir.
+
+## 🔑 Gizli Veriler ve Kurumsal Giriş
+
+* **Şifreler testlere yazılmaz:** `.env` içindeki `QA_SECRET_*` değerleri senaryoda `{{QA_SECRET_PASSWORD}}` olarak kullanılır. Model yalnızca yer tutucuyu görür, üretilen test değeri `process.env`'den okur, loglarda maskelenir.
+* **SSO / MFA / SMS-OTP:** Bir kez elle giriş yapılıp oturum kaydedilir (`STORAGE_STATE`); keşif ve tüm testler giriş yapılmış olarak başlar.
 
 ## 📁 Kullanıcıya Özel Test Klasörü
 
@@ -46,7 +66,8 @@ Ollama'da kurulu modeller arayüzdeki açılır listeden seçilebilir; daha gü�
 
 Projeyi yerel ortamda çalıştırabilmek için aşağıdaki araçların kurulu olması gerekir:
 
-* **Node.js** (v18 veya üzeri)
+* **Node.js** (22 LTS veya üzeri)
+* **Java** (JRE 11+, yalnızca Allure raporu için)
 * **Ollama**
 * **Playwright**
 * **Qwen 2.5 Coder Modeli**
@@ -54,7 +75,7 @@ Projeyi yerel ortamda çalıştırabilmek için aşağıdaki araçların kurulu 
 Önerilen model (isteğe bağlı olarak Ollama üzerinden daha güçlü modeller kullanılabilir):
 
 ```bash
-ollama run qwen2.5-coder:7b
+ollama pull qwen2.5-coder:7b
 ```
 
 ---
@@ -73,7 +94,7 @@ cd Test-Otomasyon-AI
 ## 2. Bağımlılıkları Kurun
 
 ```bash
-npm install
+npm ci
 ```
 
 ## 3. Playwright Tarayıcılarını Yükleyin
@@ -82,10 +103,10 @@ npm install
 npx playwright install
 ```
 
-## 4. Ollama Modelini Başlatın
+## 4. Ollama Modelini İndirin
 
 ```bash
-ollama run qwen2.5-coder:7b
+ollama pull qwen2.5-coder:7b
 ```
 
 ## 5. `.env` Dosyasını Oluşturun
@@ -167,10 +188,10 @@ Kullanım özetini görmek için: `node ai-agent2.js --help`
 
 ## 3. Kalıcı Test Kütüphanesi ve Tek Tık Paralel Koşum
 
-Her üretilen test artık üzerine yazılmaz; `tests/generated/features/` altında BDD/Gherkin
+Her üretilen test üzerine yazılmaz; `tests/generated/features/` altında BDD/Gherkin
 `.feature` dosyası, `tests/generated/specs/` altında eşleşen Playwright betiği olarak kalıcı biriktirilir.
-İkisi **birlikte** yazılır: keşif hiçbir uygulanabilir adım üretemezse kütüphaneye hiçbir şey
-eklenmez, böylece eşi olmayan `.feature` ya da hiçbir şey doğrulamayan boş `.spec.ts` birikmez.
+İkisi **birlikte** ve yalnızca keşif senaryonun hedefine en az bir doğrulamayla ulaştığında yazılır;
+yarım kalan keşifler kütüphaneye girmez.
 
 Biriken tüm testleri paralel çalıştırmak için:
 
@@ -196,8 +217,8 @@ Proje, tek makineyle sınırlı değildir; kod ve `tests/generated/` altındaki 
 ```bash
 git clone https://github.com/Bulutdogukan/Test-Otomasyon-AI.git
 cd Test-Otomasyon-AI
-npm install
-npx playwright install --with-deps
+npm ci
+npx playwright install --with-deps chromium
 cp .env.example .env   # ardından .env dosyasını doldurun
 ```
 
@@ -248,19 +269,26 @@ Bu yapı aşağıdaki temel bileşenlerden oluşur:
 │   ├── services/
 │   │   ├── ai.service.js     # Ollama çağrıları (planner, locator, self-healing)
 │   │   ├── compiler.service.js # Adım geçmişi -> .spec.ts üretimi
+│   │   ├── dom.scanner.js    # Canlı DOM taraması (iframe + shadow DOM)
 │   │   └── dom.ranker.js     # DOM kırpma / alaka sıralaması
 │   └── utils/
+│       ├── locator.js        # iframe locator zinciri (keşif + derleme ortak)
+│       ├── secrets.js        # QA_SECRET_* yer tutucuları ve maskeleme
+│       ├── url.js            # Hedef URL politikası (arayüz + CLI ortak)
+│       ├── npx.js            # Güvenli npx süreç başlatma
+│       ├── reportDirs.js     # Rapor klasörlerini temizleme
 │       ├── logger.js
 │       ├── staging.js        # Koşum öncesi spec kopyalama (.batch-staging/)
 │       └── steps.js          # Eylem normalizasyonu + doğrulama kuralları
 ├── pages/                    # Elle yazılmış Page Object örnekleri
 ├── tests/
 │   ├── advanced_scenarios.spec.ts   # Elle yazılmış örnek testler
+│   ├── unit/                 # Birim testleri (Ollama gerektirmez, npm run test:unit)
 │   └── generated/
 │       ├── features/         # Kalıcı .feature dosyaları
 │       └── specs/            # Kalıcı, derlenmiş .spec.ts dosyaları
 ├── scripts/pick-folder.ps1   # Windows native klasör seçme diyaloğu
-├── .github/workflows/ci.yml  # Tip kontrolü + sözdizimi kapısı
+├── .github/workflows/ci.yml  # Tip kontrolü + sözdizimi + birim testleri
 ├── Dockerfile                # Konteyner imajı tanımı
 ├── docker-compose.yml        # Ollama + QA sunucusu tek komutla
 ├── CONTRIBUTING.md           # Katkıda bulunma rehberi
@@ -294,13 +322,23 @@ Koşum çıktıları (`allure-results/`, `allure-report/`, `playwright-report/`,
 
 # 📈 Öne Çıkan Teknolojiler
 
-* Node.js
-* Playwright
-* Socket.io
-* Express.js
-* Allure Reports
-* Ollama
-* Qwen 2.5 Coder
+| Teknoloji | Projedeki rolü |
+| --- | --- |
+| **Node.js 22 LTS** | Sunucu, CLI ve keşif motoru |
+| **Playwright** | Canlı keşif tarayıcısı ve üretilen testlerin koşumu (`frameLocator` ile iframe desteği) |
+| **Ollama + Qwen 2.5 Coder (7B)** | Yerel LLM — planlama, adım seçimi, self-healing (JSON modu ile) |
+| **Express.js + Socket.io** | Web arayüzü ve canlı log akışı |
+| **Helmet** | HTTP güvenlik başlıkları |
+| **Allure Reports** (+ Java JRE) | Ekran görüntüsü, trace ve video içeren raporlar |
+| **Node.js test koşucusu (`node:test`)** | Ollama gerektirmeyen birim testleri (`npm run test:unit`) |
+| **TypeScript** | Üretilen ve elle yazılan testlerin tip kontrolü |
+| **Docker + resmi Playwright imajı** | Ollama ve QA sunucusunu tek komutla çalıştırma |
+| **GitHub Actions** | Tip kontrolü + sözdizimi + birim testleri |
+
+Bu sürümle eklenen kabiliyetler: iframe ve shadow DOM taraması, `QA_SECRET_*` ile gizli
+test verileri, kayıtlı oturumla SSO/MFA desteği (`STORAGE_STATE`), iç ağ hedefleri,
+kendinden imzalı sertifika desteği ve "yarım test kaydetmeme" güvenlik ağları. Ayrıntılar
+için kılavuzdaki [Sürüm Notları](KULLANIM_KILAVUZU.md#19-sürüm-notları) bölümüne bakın.
 
 ---
 
@@ -309,16 +347,16 @@ Koşum çıktıları (`allure-results/`, `allure-report/`, `playwright-report/`,
 * Test yazım süresini ciddi ölçüde azaltır
 * Teknik olmayan ekiplerin test oluşturmasını kolaylaştırır
 * Dinamik DOM değişikliklerine daha dayanıklıdır
-* CI/CD süreçlerine kolay entegre olur
+* Üretilen testler standart Playwright testleri olduğu için CI/CD'de AI olmadan koşar
 * İnsan hatasını minimize eder
 
 ---
 
 # 🔒 Güvenlik
 
-Sunucu, kullanıcının kendi makinesinde çalışır ama yukarıdaki Windows + Mac Mini
-senaryosunda **LAN'a açıktır**. Kimlik doğrulama olmadan aynı ağdaki herkes test
-koşturabilir, klasör oluşturabilir ve raporları okuyabilir.
+Sunucu varsayılan olarak **yalnızca kendi makinesinden** erişilebilir (`HOST=127.0.0.1`).
+Arayüzü ağdaki başka makinelere açmak için `HOST=0.0.0.0` **ve** `APP_TOKEN` birlikte
+verilmelidir; anahtarsız açılan sunucu açılışta uyarı basar.
 
 **Erişim anahtarı (`APP_TOKEN`)**
 
@@ -331,13 +369,14 @@ reddedilir. Anahtar tarayıcıda saklanır, her seferinde yeniden girmek gerekme
 openssl rand -hex 24
 ```
 
-`APP_TOKEN` boş bırakılırsa koruma **kapalıdır** ve sunucu açılışta bunu uyarı olarak
-basar. Tek makinede lokal kullanım için sorun değildir; bu durumda `HOST=127.0.0.1`
-ayarlayarak sunucuyu ağa hiç açmamanız önerilir.
+`APP_TOKEN` boş bırakılırsa koruma **kapalıdır**. Varsayılan `HOST=127.0.0.1` ile tek
+makinede lokal kullanım için sorun değildir.
 
 **Ek sıkılaştırma (opsiyonel)**
 
-* `HOST=127.0.0.1` → sunucu yalnızca kendi makinesinden erişilebilir olur.
+* `QA_ALLOWED_HOSTS=*.kurum.local` → test edilebilecek hedef alan adlarını kısıtlar.
+* `QA_BLOCK_PRIVATE_URLS=true` → iç ağ / localhost hedeflerini tamamen kapatır.
+* Gizli test verileri yalnızca `.env` içinde (`QA_SECRET_*`), kayıtlı oturumlar `auth/` altında tutulur; ikisi de git'e girmez.
 * `QA_ALLOWED_ROOT=C:\QA-Testlerim` → arayüzden seçilebilecek test klasörlerini tek bir
   kök dizinin altına kısıtlar; bu kökün dışındaki yollar reddedilir.
 
@@ -347,32 +386,26 @@ ayarlayarak sunucuyu ağa hiç açmamanız önerilir.
 
 ```bash
 npm run typecheck      # TypeScript tip kontrolü (tsc --noEmit)
+npm run test:unit      # Birim testleri: URL politikası, gizli veri maskeleme, iframe locator,
+                       # derleyici çıktısı, DOM tarayıcı (headless Chromium) — Ollama gerekmez
 ```
 
-`.github/workflows/ci.yml`, her push ve pull request'te bağımlılıkları kurup tip
-kontrolü (`tsc --noEmit`) ile Node sözdizimi kontrolünü (`node --check`) çalıştırır.
-Gerçek test koşumu CI'da bilinçli olarak yapılmaz — testler canlı bir Ollama örneği
-ve gerçek hedef sitelere erişim ister.
+`.github/workflows/ci.yml`, her push ve pull request'te tip kontrolü, Node sözdizimi
+kontrolü ve birim testlerini çalıştırır. AI ile test **üretimi** CI'da bilinçli olarak
+yapılmaz — canlı bir Ollama örneği ve gerçek hedef sitelere erişim ister.
 
 ---
 
 # 📌 Gelecek Planları
 
 * Çoklu LLM desteği
-* Selenium fallback sistemi
-* Docker & Kubernetes deployment
+* Çok kullanıcılı eşzamanlı çalışma (iş kuyruğu)
+* Dosya yükleme / tarayıcı onay penceresi eylemleri
 * AI destekli hata analizi
 
 ---
 
-# 🌿 Geliştirme Dalları (Branch'ler)
+# 🌿 Katkıda Bulunma
 
-| Dal                             | Durum                 | Açıklama                                                                 |
-| -------------------------------- | --------------------- | ------------------------------------------------------------------------ |
-| `main`                            | **Güncel / yayın**    | Bu belgede anlatılan tüm özellikleri içeren güncel sürüm.                |
-| `fix/security-and-cleanup`        | `main` ile eşit       | Güvenlik/temizlik düzeltmeleri, self-healing ve keşif döngüsü iyileştirmeleri, kalıcı Gherkin kütüphanesi ve çoklu makine desteği bu dalda geliştirildi; `main`'e alındı. |
-| `refactor/stability-self-healing` | Geçmiş geliştirme     | Kararlılık düzeltmeleri, DOM chunking, self-healing ve eylem repertuarı (hover/dragAndDrop) çalışmalarının yapıldığı dal. |
-
-`main` ve `fix/security-and-cleanup` şu anda **aynı commit'i** gösteriyor; geliştirme
-tamamlanıp birleştirildiği için ikisi arasında fark yoktur. Yeni bir çalışmaya
-başlarken `main`'den yeni bir dal açmanız önerilir.
+Dal adlandırma, commit formatı ve kod kuralları için [CONTRIBUTING.md](CONTRIBUTING.md)
+dosyasına bakın. Yeni bir çalışmaya `main`'den yeni bir dal açarak başlayın.

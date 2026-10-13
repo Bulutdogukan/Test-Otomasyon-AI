@@ -9,6 +9,7 @@ if (!process.env.OLLAMA_URL || !process.env.OLLAMA_MODEL) {
 }
 
 const { executeAutonomousFlow } = require('./src/core/orchestrator');
+const { sanitizeTargetUrl } = require('./src/utils/url');
 
 const args = process.argv.slice(2);
 const useGrid = args.includes('--grid');
@@ -36,7 +37,14 @@ if (positional.length < 2) {
   process.exit(1);
 }
 
-const url = positional[0];
+// Arayüzle AYNI URL kuralları (src/utils/url.js) — iki giriş noktası farklı davranmasın.
+let url;
+try {
+  url = sanitizeTargetUrl(positional[0]);
+} catch (e) {
+  console.error(`❌ URL hatası: ${e.message}`);
+  process.exit(1);
+}
 const prompt = positional.slice(1).join(' ');
 
 // CLI modunda da Grid desteği: --grid verildiğinde derlenen Playwright testinin

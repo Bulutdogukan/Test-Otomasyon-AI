@@ -9,6 +9,8 @@ export default defineConfig({
   // buraya iletir. Böylece klasör yolu komut satırı argümanına hiç girmez
   // (boşluklu yol / kaçışlama sorunları oluşmaz). Boşsa proje içi ./tests kullanılır.
   testDir: process.env.PW_TEST_DIR || './tests',
+  // tests/unit altındaki dosyalar Node'un kendi test koşucusuyla (npm run test:unit) koşar.
+  testIgnore: '**/unit/**',
 
   // Kalıcı olarak biriken tests/generated/specs klasöründeki tüm testlerin
   // tek tıkla paralel koşulabilmesi için. PW_WORKERS ile makineye göre
@@ -18,6 +20,8 @@ export default defineConfig({
 
   /* --- EKLENEN KISIM --- */
   timeout: 60000, // Test başına maksimum süre (60 saniye)
+  // Kararsız ağ/ortamlar için yeniden deneme sayısı (varsayılan 0: hata gizlenmesin).
+  retries: process.env.PW_RETRIES ? Number(process.env.PW_RETRIES) : 0,
   expect: {
     timeout: 10000, // Assertion beklemeleri için (10 saniye)
   },
@@ -29,6 +33,11 @@ export default defineConfig({
   ], 
   use: {
     baseURL: process.env.BASE_URL,
+    // SSO / MFA ile korunan uygulamalar: önceden kaydedilmiş oturumla başla
+    // (npx playwright codegen --save-storage=auth/oturum.json <adres>).
+    ...(process.env.STORAGE_STATE ? { storageState: process.env.STORAGE_STATE } : {}),
+    // Kendinden imzalı sertifikalı iç ortamlar için (keşif fazıyla aynı kural).
+    ignoreHTTPSErrors: String(process.env.IGNORE_HTTPS_ERRORS || '').toLowerCase() === 'true',
     // ☁️ Grid yönlendirmesi config seviyesinde: PW_WS_ENDPOINT ayarlıysa TÜM testler
     // (elle yazılmış olanlar dahil) uzak tarayıcıdan koşar. AI'ın ürettiği spec'lerdeki
     // test.use bloğu aynı değeri kullandığından çakışma olmaz.

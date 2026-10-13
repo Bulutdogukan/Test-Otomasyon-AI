@@ -20,6 +20,9 @@ if (!process.env.OLLAMA_URL || !process.env.OLLAMA_MODEL) {
 
 const { executeAutonomousFlow } = require('./src/core/orchestrator');
 const { stageSpecTree } = require('./src/utils/staging');
+const { sanitizeTargetUrl } = require('./src/utils/url');
+const { spawnNpx } = require('./src/utils/npx');
+const { cleanReportDirs } = require('./src/utils/reportDirs');
 
 // ⚠️ DÜZELTME: Süreç seviyesinde güvenlik ağı. İşlenmemiş promise reddi veya
 // yakalanmamış istisna artık sunucuyu sessizce kilitlemez/çökertmez; loglanır.
@@ -155,29 +158,8 @@ try {
     }
 } catch { /* uploads boşsa veya izin yoksa sessizce geç */ }
 
-// 🔒 URL güvenlik doğrulaması: yalnızca http/https şemasına ve kamuya açık
-// adreslere izin verilir. Tehlikeli şemalar (file://, javascript://, data://)
-// ve iç ağ/loopback hedefleri (SSRF koruması) reddedilir.
-const PRIVATE_IP_RE = /^(localhost|127\.|10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.|::1|0\.0\.0\.0)/i;
-
-function sanitizeTargetUrl(raw) {
-    const trimmed = String(raw || '').trim();
-    if (!trimmed) throw new Error('Hedef URL boş olamaz.');
-    let parsed;
-    try {
-        // Şema yoksa https ekle, sonra parse et.
-        parsed = new URL(trimmed.includes('://') ? trimmed : 'https://' + trimmed);
-    } catch {
-        throw new Error('Geçersiz URL formatı.');
-    }
-    if (!['http:', 'https:'].includes(parsed.protocol)) {
-        throw new Error(`Yalnızca http/https şemasına izin verilir (alınan: ${parsed.protocol}).`);
-    }
-    if (PRIVATE_IP_RE.test(parsed.hostname)) {
-        throw new Error(`Güvenlik: iç ağ veya loopback adreslerine erişim engellendi (${parsed.hostname}).`);
-    }
-    return parsed.href;
-}
+// 🔒 URL doğrulaması src/utils/url.js içindedir (CLI ile ortak kural).
+// İç ağ adresleri varsayılan olarak serbesttir; QA_BLOCK_PRIVATE_URLS / QA_ALLOWED_HOSTS ile kısıtlanır.
 
 const upload = multer({
     dest: UPLOAD_DIR,
@@ -319,16 +301,6 @@ function sanitizeModelName(raw) {
     return clean;
 }
 
-// Rapor klasörleri toplu koşum öncesi temizlenir; aksi halde Allure eski ve yeni
-// sonuçları karıştırır.
-function cleanReportDirs() {
-    ['allure-results', 'allure-report', 'playwright-report', 'test-results'].forEach(dir => {
-        const dirPath = path.join(__dirname, dir);
-        if (fs.existsSync(dirPath)) fs.rmSync(dirPath, { recursive: true, force: true });
-    });
-}
-
-const npxCmd = process.platform === 'win32' ? 'npx.cmd' : 'npx';
 
 // 🚦 /upload endpoint'i için hız sınırı (dosya yükleme spam'ini önler).
 const uploadAttempts = new Map(); // ip -> { count, resetAt }
@@ -455,7 +427,7 @@ io.on('connection', (socket) => {
             return;
         }
 
-        // 🔒 URL güvenlik doğrulaması: tehlikeli şemalar ve iç ağ adresleri reddedilir.
+        // 🔒 URL güvenlik doğrulaması: tehlikeli şemalar ve (açıksa) izin dışı adresler reddedilir.
         let safeUrl;
         try {
             safeUrl = sanitizeTargetUrl(url);
@@ -592,7 +564,7 @@ io.on('connection', (socket) => {
             socket.emit('log', `\n⚠️ "Uzak Sunucuda Çalıştır" seçili ama .env içinde GRID_WS_ENDPOINT tanımlı değil — lokal tarayıcı kullanılacak.\n`);
         }
 
-        cleanReportDirs();
+        cleanReportDirs(__dirname);
 
         // Hazırlık klasörü PW_TEST_DIR env'i ile config'e iletilir; klasör yolu
         // CLI argümanına hiç girmez (boşluklu yol/kaçışlama derdi yok).
@@ -610,10 +582,9 @@ io.on('connection', (socket) => {
             isBatchRunning = false;
         };
 
-        // shell: true Windows'ta .cmd dosyalarını çalıştırmak için gereklidir.
-        // Argümanlar kullanıcı girdisi değil, tümü sabit veya sistem üretimi.
-        const testProcess = spawn(npxCmd, ['playwright', 'test', '--reporter=list,allure-playwright'], {
-            env: envVars, shell: true, cwd: __dirname
+        // npx Windows'ta .cmd'dir ve shell ister; komut satırı spawnNpx'te güvenli kurulur.
+        const testProcess = spawnNpx(['playwright', 'test', '--reporter=list,allure-playwright'], {
+            env: envVars, cwd: __dirname
         });
 
         testProcess.on('error', (err) => {
@@ -630,8 +601,8 @@ io.on('connection', (socket) => {
 
             // ⚠️ DÜZELTME: cwd eklendi. Göreli './allure-results' yolları sunucu farklı
             // bir dizinden başlatıldığında yanlış klasöre bakıyordu.
-            const allureProcess = spawn(npxCmd, ['allure', 'generate', './allure-results', '-o', './allure-report', '--clean'], {
-                shell: true, cwd: __dirname
+            const allureProcess = spawnNpx(['allure', 'generate', './allure-results', '-o', './allure-report', '--clean'], {
+                cwd: __dirname
             });
 
             allureProcess.on('error', (err) => {
@@ -662,20 +633,25 @@ io.on('connection', (socket) => {
 });
 
 const PORT = process.env.PORT || 3000;
-// Varsayılan olarak tüm arayüzlere bağlanır (README'deki Windows + Mac Mini
-// senaryosu için). Tek makinede kullanıyorsanız .env'de HOST=127.0.0.1 verip
-// sunucuyu tamamen dışarı kapatabilirsiniz.
-const HOST = process.env.HOST || '0.0.0.0';
+// Güvenli varsayılan: yalnızca bu makineden erişilir. Arayüzü ağdaki başka
+// makinelere açmak için .env'de HOST=0.0.0.0 VE APP_TOKEN birlikte verilmelidir.
+const HOST = process.env.HOST || '127.0.0.1';
+const IS_LOOPBACK_HOST = ['127.0.0.1', 'localhost', '::1'].includes(HOST);
 
 server.listen(PORT, HOST, () => {
     console.log(`\n===========================================`);
     console.log(`🌐 QA MANAGEMENT SERVER AKTİF - PORT: ${PORT}`);
     console.log(`   Adres : http://localhost:${PORT}`);
-    console.log(`   Erişim: ${HOST === '127.0.0.1' ? 'yalnızca bu makine' : 'ağa açık (' + HOST + ')'}`);
+    console.log(`   Erişim: ${IS_LOOPBACK_HOST ? 'yalnızca bu makine' : 'ağa açık (' + HOST + ')'}`);
     if (AUTH_REQUIRED) {
         console.log(`   Koruma: 🔐 APP_TOKEN AKTİF`);
     } else {
         console.log(`   Koruma: ⚠️ YOK — .env içinde APP_TOKEN tanımlayarak koruma açılır`);
+        if (!IS_LOOPBACK_HOST) {
+            console.warn(`
+⚠️ UYARI: Sunucu AĞA AÇIK ve erişim anahtarı YOK. Aynı ağdaki herkes bu makinede`);
+            console.warn(`   tarayıcı açtırıp test koşturabilir. .env dosyasına APP_TOKEN ekleyin.`);
+        }
     }
     console.log(`===========================================\n`);
 
